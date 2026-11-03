@@ -8,7 +8,7 @@ Wolf Den answers three questions:
 3. Where did I leave off, and what should I do next?
 
 ## Status
-**Slices 1–2 implemented.** Local Git and optional GitHub issue/PR information are available. Quick actions belong to a later slice.
+**Slices 1–3 implemented.** Local Git, optional GitHub issue/PR information and safe project quick actions are available.
 
 ## Setup
 
@@ -38,7 +38,11 @@ Create `~/.config/wolf-den/projects.json`:
 }
 ```
 
-`repository` is optional. For GitHub data, install and authenticate the GitHub CLI (`gh auth login`), then set `repository` to `owner/name`. Paths must be absolute or start with `~/`. The dashboard uses `↑` and `↓` to select a project, `r` to refresh its GitHub data, and `q`, `Esc`, or `Ctrl+C` to exit. PR URLs are displayed as text. Missing GitHub configuration or CLI, authentication and network failures appear as unavailable; failed refreshes retain the last successful result as stale. Local Git remains visible throughout.
+`repository` is optional. For GitHub data, install and authenticate the GitHub CLI (`gh auth login`), then set `repository` to `owner/name`. Paths must be absolute or start with `~/`. Missing GitHub configuration or CLI, authentication and network failures appear as unavailable; failed refreshes retain the last successful result as stale. Local Git remains visible throughout.
+
+Keyboard controls: `↑`/`↓` select a project; `Tab` selects the next available PR (the first press selects the first PR); `e` opens the project in VS Code; `o` opens a terminal in its directory; `g` opens its configured GitHub repository; `p` opens the selected PR; `r` refreshes GitHub information; `?` toggles help; `q`, `Esc`, or `Ctrl+C` quit. PR selection resets when changing projects or refreshing. Actions show launch feedback or an error in the dashboard.
+
+Linux quick actions use `code` and `xdg-open` from `PATH`. Terminal launch tries `konsole`, `gnome-terminal`, `xfce4-terminal`, `kitty`, `alacritty`, then `xterm`, using the selected project as the process working directory and each emulator's working-directory option where supported. A graphical session (`DISPLAY` or `WAYLAND_DISPLAY`) is required. If no supported emulator is installed, Wolf Den reports an error. A successful launch means the external process started; a later failure inside that application may not be visible to Wolf Den. Opening a terminal does not change the parent shell's directory.
 
 Run `pnpm typecheck`, `pnpm test`, and `pnpm build` for verification. After building, `bin/wolf-den.mjs` is also a launcher for the CLI.
 
