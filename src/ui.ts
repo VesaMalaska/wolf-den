@@ -20,8 +20,14 @@ function details(state: ProjectState | undefined): string {
   return [state.project.name, `Lifecycle: ${state.project.lifecycle}`, `Next action: ${state.project.nextAction ?? "Not set"}`, `Directory: ${state.project.path}`, gitLabel(state), changes].filter(Boolean).join("\n");
 }
 
+export function moveSelection(selected: number, count: number, direction: "up" | "down"): number {
+  if (count === 0) return 0;
+  return Math.max(0, Math.min(count - 1, selected + (direction === "up" ? -1 : 1)));
+}
+
 export async function runDashboard(): Promise<void> {
   const renderer = await createCliRenderer({ exitOnCtrlC: true });
+  let destroyed = false;
   let states: ProjectState[] = [];
   let selected = 0;
   let notice = "Loading project registry…";
@@ -37,28 +43,34 @@ export async function runDashboard(): Promise<void> {
   renderer.root.add(layout);
 
   const render = () => {
+    if (destroyed) return;
     list.content = states.length ? states.map((state, index) => `${index === selected ? "❯" : " "} ${state.project.name}  ${gitLabel(state)}`).join("\n") : notice;
     detail.content = details(states[selected]);
   };
   const onKey = (key: KeyEvent) => {
     if (key.name === "q" || key.name === "escape") { renderer.destroy(); return; }
-    if (key.name === "up") selected = Math.max(0, selected - 1);
-    else if (key.name === "down") selected = Math.min(states.length - 1, selected + 1);
+    if (key.name === "up" || key.name === "down") selected = moveSelection(selected, states.length, key.name);
     else return;
     render();
   };
   renderer.keyInput.on("keypress", onKey);
-  renderer.once("destroy", () => renderer.keyInput.off("keypress", onKey));
+  renderer.once("destroy", () => {
+    destroyed = true;
+    renderer.keyInput.off("keypress", onKey);
+  });
   render();
 
   try {
     const projects = await loadRegistry();
+    if (destroyed) return;
     states = projects.map(project => ({ project, git: { kind: "loading" } }));
     notice = "No projects configured.";
     render();
     states = await loadProjectStates(projects);
+    if (destroyed) return;
     render();
   } catch (error) {
+    if (destroyed) return;
     notice = error instanceof RegistryError ? error.message : "Could not load project data.";
     render();
   }
