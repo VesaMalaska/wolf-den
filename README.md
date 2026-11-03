@@ -8,7 +8,38 @@ Wolf Den answers three questions:
 3. Where did I leave off, and what should I do next?
 
 ## Status
-**Planning — v0.1 MVP approved.** No implementation exists yet.
+**Slice 1 implemented.** Local registry and Git dashboard are available. GitHub and quick actions belong to later slices.
+
+## Setup
+
+Requires Linux, Git, pnpm 11, and Node.js 26.4 or later. OpenTUI requires ESM and Node's `--experimental-ffi` flag; the launcher and `pnpm start` supply the flag. See [OpenTUI runtime support](https://opentui.com/docs/getting-started/runtime-support/).
+
+```sh
+pnpm install
+pnpm build
+pnpm start
+```
+
+Create `~/.config/wolf-den/projects.json`:
+
+```json
+{
+  "version": 1,
+  "projects": [
+    {
+      "id": "example",
+      "name": "Example",
+      "path": "~/projects/example",
+      "lifecycle": "active",
+      "nextAction": "Review the next task"
+    }
+  ]
+}
+```
+
+`repository` is optional and unused in Slice 1. Paths must be absolute or start with `~/`. The dashboard uses `↑` and `↓` to select a project and `q`, `Esc`, or `Ctrl+C` to exit. A missing registry, invalid JSON, missing directory, non-Git directory, or missing Git CLI appears as an informational state.
+
+Run `pnpm typecheck`, `pnpm test`, and `pnpm build` for verification. After building, `bin/wolf-den.mjs` is also a launcher for the CLI.
 
 ## MVP
 - Read a small local project registry.
