@@ -13,4 +13,12 @@ export type GitState =
   | { kind: "unavailable"; reason: string }
   | { kind: "stale"; previous: Extract<GitState, { kind: "available" }>; reason: string };
 
-export type ProjectState = { project: Project; git: GitState };
+export type GithubPullRequest = { number: number; title: string; url: string; review: string | null; checks: string | null; draft: boolean };
+export type GithubAvailable = { kind: "available"; issues: number; pullRequests: GithubPullRequest[] };
+export type GithubState =
+  | { kind: "loading"; previous?: GithubAvailable }
+  | GithubAvailable
+  | { kind: "stale"; previous: GithubAvailable; reason: string }
+  | { kind: "unavailable"; reason: string };
+
+export type ProjectState = { project: Project; git: GitState; github: GithubState };

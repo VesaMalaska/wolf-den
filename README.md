@@ -8,7 +8,7 @@ Wolf Den answers three questions:
 3. Where did I leave off, and what should I do next?
 
 ## Status
-**Slice 1 implemented.** Local registry and Git dashboard are available. GitHub and quick actions belong to later slices.
+**Slices 1–2 implemented.** Local Git and optional GitHub issue/PR information are available. Quick actions belong to a later slice.
 
 ## Setup
 
@@ -30,6 +30,7 @@ Create `~/.config/wolf-den/projects.json`:
       "id": "example",
       "name": "Example",
       "path": "~/projects/example",
+      "repository": "owner/example",
       "lifecycle": "active",
       "nextAction": "Review the next task"
     }
@@ -37,7 +38,7 @@ Create `~/.config/wolf-den/projects.json`:
 }
 ```
 
-`repository` is optional and unused in Slice 1. Paths must be absolute or start with `~/`. The dashboard uses `↑` and `↓` to select a project and `q`, `Esc`, or `Ctrl+C` to exit. A missing registry, invalid JSON, missing directory, non-Git directory, or missing Git CLI appears as an informational state.
+`repository` is optional. For GitHub data, install and authenticate the GitHub CLI (`gh auth login`), then set `repository` to `owner/name`. Paths must be absolute or start with `~/`. The dashboard uses `↑` and `↓` to select a project, `r` to refresh its GitHub data, and `q`, `Esc`, or `Ctrl+C` to exit. PR URLs are displayed as text. Missing GitHub configuration or CLI, authentication and network failures appear as unavailable; failed refreshes retain the last successful result as stale. Local Git remains visible throughout.
 
 Run `pnpm typecheck`, `pnpm test`, and `pnpm build` for verification. After building, `bin/wolf-den.mjs` is also a launcher for the CLI.
 
