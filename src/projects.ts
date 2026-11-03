@@ -2,13 +2,17 @@ import type { GithubState, Project, ProjectState } from "./domain.js";
 import { inspectGit } from "./git.js";
 import { inspectGithub } from "./github.js";
 
-export async function loadProjectStates(projects: Project[], inspect = inspectGit, inspectRemote = inspectGithub): Promise<ProjectState[]> {
-  return Promise.all(projects.map(async project => {
-    const [git, github] = await Promise.all([
-      inspect(project.path).catch(() => ({ kind: "unavailable" as const, reason: "Git inspection failed." })),
-      inspectRemote(project.repository).catch(() => ({ kind: "unavailable" as const, reason: "GitHub inspection failed." })),
-    ]);
-    return { project, git, github };
+export async function loadProjectStates(projects: Project[], inspect = inspectGit, inspectRemote = inspectGithub,
+  onUpdate?: (state: ProjectState, index: number) => void): Promise<ProjectState[]> {
+  return Promise.all(projects.map(async (project, index) => {
+    const state: ProjectState = { project, git: { kind: "loading" }, github: project.repository
+      ? { kind: "loading" } : { kind: "unavailable", reason: "No GitHub repository configured." } };
+    const local = inspect(project.path).catch(() => ({ kind: "unavailable" as const, reason: "Git inspection failed." }))
+      .then(git => { state.git = git; onUpdate?.(state, index); });
+    const remote = project.repository ? inspectRemote(project.repository).catch(() => ({ kind: "unavailable" as const, reason: "GitHub inspection failed." }))
+      .then(github => { state.github = github; onUpdate?.(state, index); }) : Promise.resolve();
+    await Promise.all([local, remote]);
+    return state;
   }));
 }
 

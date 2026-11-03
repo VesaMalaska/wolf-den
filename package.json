@@ -9,7 +9,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "tsc",
-    "test": "pnpm build && node --test dist/test/*.test.js",
+    "test": "pnpm build && node --experimental-ffi --test dist/test/*.test.js",
     "start": "node --experimental-ffi dist/src/main.js"
   },
   "dependencies": {

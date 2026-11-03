@@ -36,7 +36,9 @@ test("missing, auth, offline, rate limit and malformed results are unavailable",
     const state = await inspectGithub("owner/repo", async () => { throw error; });
     assert.equal(state.kind, "unavailable");
   }
-  assert.equal((await inspectGithub("owner/repo", async () => "not json")).kind, "unavailable");
+  const malformed = await inspectGithub("owner/repo", async () => "not json");
+  assert.equal(malformed.kind, "unavailable");
+  if (malformed.kind === "unavailable") assert.match(malformed.reason, /invalid data.*update gh/);
   assert.equal((await inspectGithub(undefined, async () => { throw new Error("should not call"); })).kind, "unavailable");
 });
 

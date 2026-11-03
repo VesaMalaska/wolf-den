@@ -8,11 +8,11 @@ Wolf Den answers three questions:
 3. Where did I leave off, and what should I do next?
 
 ## Status
-**Slices 1–3 implemented.** Local Git, optional GitHub issue/PR information and safe project quick actions are available.
+**v0.1 release candidate.** Local Git, optional GitHub issue/PR information and safe project quick actions are available. See [manual QA](docs/ISSUE-4-QA.md) for verification limits.
 
 ## Setup
 
-Requires Linux, Git, pnpm 11, and Node.js 26.4 or later. OpenTUI requires ESM and Node's `--experimental-ffi` flag; the launcher and `pnpm start` supply the flag. See [OpenTUI runtime support](https://opentui.com/docs/getting-started/runtime-support/).
+Requires Linux, Git, pnpm 11, and Node.js 26.4 or later with `--experimental-ffi` support. OpenTUI requires ESM and the FFI flag; the launcher and `pnpm start` supply it. Node 26.0 cannot launch the dashboard. See [OpenTUI runtime support](https://opentui.com/docs/getting-started/runtime-support/). A UTF-8 terminal is recommended; the interface is designed for Kitty on openSUSE Tumbleweed and also uses standard terminal escape sequences. Graphical quick actions require a desktop session.
 
 ```sh
 pnpm install
@@ -40,11 +40,23 @@ Create `~/.config/wolf-den/projects.json`:
 
 `repository` is optional. For GitHub data, install and authenticate the GitHub CLI (`gh auth login`), then set `repository` to `owner/name`. Paths must be absolute or start with `~/`. Missing GitHub configuration or CLI, authentication and network failures appear as unavailable; failed refreshes retain the last successful result as stale. Local Git remains visible throughout.
 
-Keyboard controls: `↑`/`↓` select a project; `Tab` selects the next available PR (the first press selects the first PR); `e` opens the project in VS Code; `o` opens a terminal in its directory; `g` opens its configured GitHub repository; `p` opens the selected PR; `r` refreshes GitHub information; `?` toggles help; `q`, `Esc`, or `Ctrl+C` quit. PR selection resets when changing projects or refreshing. Actions show launch feedback or an error in the dashboard.
+Keyboard controls: `↑`/`↓` select a project; `Tab` selects the next available PR (the first press selects the first PR); `PgUp`/`PgDn` scroll details and help; `e` opens the project in VS Code; `o` opens a terminal in its directory; `g` opens its configured GitHub repository; `p` opens the selected PR; `r` refreshes GitHub information; `?` toggles help; `q`, `Esc`, or `Ctrl+C` quit. PR selection resets when changing projects or refreshing. The selected project and PR have a leading `>` marker. The project list and details are bounded to the terminal size; long lines are clipped with `…`. The footer keeps help and quit visible on narrow screens. Actions show launch feedback or an error in the dashboard.
 
 Linux quick actions use `code` and `xdg-open` from `PATH`. Terminal launch tries `konsole`, `gnome-terminal`, `xfce4-terminal`, `kitty`, `alacritty`, then `xterm`, using the selected project as the process working directory and each emulator's working-directory option where supported. A graphical session (`DISPLAY` or `WAYLAND_DISPLAY`) is required. If no supported emulator is installed, Wolf Den reports an error. A successful launch means the external process started; a later failure inside that application may not be visible to Wolf Den. Opening a terminal does not change the parent shell's directory.
 
 Run `pnpm typecheck`, `pnpm test`, and `pnpm build` for verification. After building, `bin/wolf-den.mjs` is also a launcher for the CLI.
+
+## Troubleshooting
+
+- **Registry error:** create `~/.config/wolf-den/projects.json` using the example above. JSON must use `version: 1`; project IDs must be unique, paths absolute or `~/` based, and repository values must be `owner/name`. Unknown fields are rejected. A missing project directory remains listed with an unavailable Git state.
+- **Git unavailable:** install Git and check that the configured path is an accessible Git working tree. Local Git does not require GitHub or a network connection.
+- **GitHub unavailable:** install `gh`, run `gh auth login`, verify access with `gh repo view owner/name`, and retry with `r`. A failed refresh preserves the last successful GitHub result as stale. Malformed `gh` data is reported as invalid rather than shown as a partial count.
+- **Launch error:** install `code` or `xdg-open` on `PATH`, or one of the supported terminal emulators. Terminal launch needs `DISPLAY` or `WAYLAND_DISPLAY`. The dashboard reports immediate process launch errors; failures after a graphical app starts may need to be checked in that app.
+- **Terminal does not start:** check `node --version` and confirm `node --experimental-ffi` is supported. If a terminal session is interrupted outside Wolf Den's handled exit path, use `reset` to restore it.
+
+## Known limitations
+
+GitHub information is fetched on startup and manually with `r`; no background synchronization runs. Counts are limited to fewer than 1,000 open issues and PRs per repository; a result at the limit is unavailable rather than shown as complete. PR selection and opening require fresh available GitHub data. Next action is always manually maintained in the registry. Narrow views clip long lines, including project names and messages; use a wider terminal to read the full text. Graphical launch success means the program started, not that it opened a window successfully.
 
 ## MVP
 - Read a small local project registry.
