@@ -40,6 +40,12 @@ export function moveSelection(selected: number, count: number, direction: "up" |
   return Math.max(0, Math.min(count - 1, selected + (direction === "up" ? -1 : 1)));
 }
 
+export function projectLoadNotice(phase: "registry" | "loading" | "ready", count = 0): string {
+  if (phase === "registry") return "Loading project registry…";
+  if (count === 0) return "No projects configured.";
+  return `${phase === "loading" ? "Loading" : "Ready:"} ${count} project${count === 1 ? "" : "s"}${phase === "loading" ? "…" : "."}`;
+}
+
 export async function runDashboard(): Promise<void> {
   const renderer = await createCliRenderer({ exitOnCtrlC: true });
   let destroyed = false;
@@ -47,7 +53,8 @@ export async function runDashboard(): Promise<void> {
   let selected = 0;
   let selectedPr = -1;
   let showingHelp = false;
-  let notice = "Loading project registry…";
+  let notice = projectLoadNotice("registry");
+  let registryLoaded = false;
   let initialLoadPending = true;
   const refresh = new GithubRefresh();
   const actions = new ProjectActions();
@@ -69,7 +76,7 @@ export async function runDashboard(): Promise<void> {
     list.content = states.length ? states.map((state, index) => `${index === selected ? "❯" : " "} ${safeText(state.project.name)}  ${gitLabel(state)}  ·  ${githubLabel(state)}`).join("\n") : notice;
     detail.content = showingHelp
       ? "Keyboard shortcuts\n↑/↓  Select project\nTab  Select next PR (first press selects the first PR)\ne  Open project in VS Code\no  Open terminal in project\ng  Open GitHub repository\np  Open selected PR\nr  Refresh selected project's GitHub data\n?  Close help\nq / Esc / Ctrl+C  Quit"
-      : details(states[selected], selectedPr);
+      : registryLoaded ? details(states[selected], selectedPr) : notice;
     message.content = notice;
   };
   const onKey = (key: KeyEvent) => {
@@ -85,12 +92,11 @@ export async function runDashboard(): Promise<void> {
       render(); return;
     }
     if (key.name === "r") {
-      if (state && !initialLoadPending) {
-        if (!state.project.repository) { notice = "No GitHub repository configured for this project."; render(); return; }
-        selectedPr = -1;
-        notice = `Refreshing GitHub for ${safeText(state.project.name)}…`;
-        void refresh.refresh(state, github => { if (!destroyed) { state.github = github; notice = github.kind === "unavailable" || github.kind === "stale" ? github.reason : github.kind === "available" ? "GitHub refreshed." : notice; render(); } });
-      }
+      if (!state || initialLoadPending) { notice = "No project is ready for refresh."; render(); return; }
+      if (!state.project.repository) { notice = "No GitHub repository configured for this project."; render(); return; }
+      selectedPr = -1;
+      notice = `Refreshing GitHub for ${safeText(state.project.name)}…`;
+      void refresh.refresh(state, github => { if (!destroyed) { state.github = github; notice = github.kind === "unavailable" || github.kind === "stale" ? github.reason : github.kind === "available" ? "GitHub refreshed." : notice; render(); } });
       return;
     }
     if (["e", "o", "g", "p"].includes(key.name)) {
@@ -100,11 +106,12 @@ export async function runDashboard(): Promise<void> {
         : key.name === "o" ? actions.terminal(state.project)
         : key.name === "g" ? actions.repository(state.project)
         : pr ? actions.pullRequest(state.project, pr) : Promise.reject(new Error("Select an available PR with Tab first."));
-      void action.then(() => { if (!destroyed) { notice = `${key.name.toUpperCase()} action launched for ${safeText(state.project.name)}.`; render(); } })
+      const launched = key.name === "e" ? "VS Code" : key.name === "o" ? "Terminal" : key.name === "g" ? "Repository opener" : `PR #${pr?.number} opener`;
+      void action.then(() => { if (!destroyed) { notice = `${launched} launched for ${safeText(state.project.name)}.`; render(); } })
         .catch((error: unknown) => { if (!destroyed) { notice = error instanceof Error ? error.message : "Action failed."; render(); } });
       return;
     }
-    if (key.name === "up" || key.name === "down") { selected = moveSelection(selected, states.length, key.name); selectedPr = -1; notice = "↑/↓ project · Tab PR · e editor · o terminal · g repo · p PR · r refresh · ? help · q quit"; }
+    if (key.name === "up" || key.name === "down") { selected = moveSelection(selected, states.length, key.name); selectedPr = -1; notice = states[selected] ? `Selected ${safeText(states[selected]!.project.name)}.` : projectLoadNotice("ready"); }
     else return;
     render();
   };
@@ -118,12 +125,14 @@ export async function runDashboard(): Promise<void> {
   try {
     const projects = await loadRegistry();
     if (destroyed) return;
+    registryLoaded = true;
     states = projects.map(project => ({ project, git: { kind: "loading" }, github: project.repository ? { kind: "loading" } : { kind: "unavailable", reason: "No GitHub repository configured." } }));
-    notice = "No projects configured.";
+    notice = projectLoadNotice("loading", projects.length);
     render();
     states = await loadProjectStates(projects);
     if (destroyed) return;
     initialLoadPending = false;
+    notice = projectLoadNotice("ready", states.length);
     render();
   } catch (error) {
     if (destroyed) return;
