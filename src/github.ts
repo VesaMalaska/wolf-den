@@ -52,6 +52,8 @@ export function parseGithub(issuesJson: string, prsJson: string, repository: str
 
 export function githubError(error: unknown): string {
   if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return "GitHub CLI (gh) is not installed.";
+  if (error instanceof SyntaxError || error instanceof z.ZodError || (error instanceof Error && /Unexpected GitHub pull request URL/.test(error.message)))
+    return "GitHub returned invalid data. Check the repository and update gh, then refresh.";
   const message = error instanceof Error ? messageText(error) : "";
   if (/authentication|not logged in|gh auth login|unauthorized|HTTP 401/i.test(message)) return "GitHub CLI is not authenticated. Run gh auth login.";
   if (/rate limit|secondary rate limit|HTTP 429/i.test(message)) return "GitHub rate limit reached. Try again later.";

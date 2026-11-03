@@ -14,6 +14,16 @@ function gitLabel(state: ProjectState): string {
 
 function safeText(value: string): string { return value.replace(/[\x00-\x1f\x7f-\x9f]/g, " "); }
 
+export function fitLine(value: string, width: number): string {
+  const chars = Array.from(safeText(value));
+  if (width <= 0) return "";
+  return chars.length <= width ? chars.join("") : `${chars.slice(0, Math.max(0, width - 1)).join("")}…`;
+}
+
+export function visibleWindow(total: number, selected: number, height: number): number {
+  return Math.max(0, Math.min(selected - Math.floor(Math.max(1, height) / 2), total - Math.max(1, height)));
+}
+
 function githubLabel(state: ProjectState): string {
   const remote = state.github;
   if (remote.kind === "unavailable") return `GitHub unavailable: ${remote.reason}`;
@@ -23,16 +33,23 @@ function githubLabel(state: ProjectState): string {
   return remote.kind === "stale" ? `GitHub stale: ${counts} · ${remote.reason}` : `GitHub: ${counts}`;
 }
 
-function details(state: ProjectState | undefined, selectedPr: number): string {
-  if (!state) return "No projects configured. Add a project to the registry.";
+function detailLines(state: ProjectState | undefined, selectedPr: number): { lines: string[]; selectedLine: number } {
+  if (!state) return { lines: ["No projects configured. Add a project to the registry."], selectedLine: 0 };
   const git = state.git;
   const changes = git.kind === "available"
     ? `Changes: ${git.clean ? "none" : [git.staged && "staged", git.unstaged && "unstaged", git.untracked && "untracked"].filter(Boolean).join(", ")}`
     : "";
   const remote = state.github;
   const data = remote.kind === "available" ? remote : remote.kind === "stale" || remote.kind === "loading" ? remote.previous : undefined;
-  const prs = data?.pullRequests.map((pr, index) => `${index === selectedPr ? "❯" : " "} #${pr.number} ${safeText(pr.title)}${pr.draft ? " [draft]" : ""}\n  ${pr.url}\n  Review: ${pr.review ?? "unavailable"} · Checks: ${pr.checks ?? "unavailable"}`) ?? [];
-  return [safeText(state.project.name), `Lifecycle: ${safeText(state.project.lifecycle)}`, `Next action: ${safeText(state.project.nextAction ?? "Not set")}`, `Directory: ${state.project.path}`, gitLabel(state), changes, githubLabel(state), ...prs].filter(Boolean).join("\n");
+  const lines = [safeText(state.project.name), `Lifecycle: ${safeText(state.project.lifecycle)}`, `Next action: ${safeText(state.project.nextAction ?? "Not set")}`, `Directory: ${safeText(state.project.path)}`, gitLabel(state), changes, githubLabel(state)].filter(Boolean);
+  let selectedLine = 0;
+  data?.pullRequests.forEach((pr, index) => {
+    if (index === selectedPr) selectedLine = lines.length;
+    lines.push(`${index === selectedPr ? ">" : " "} #${pr.number} ${safeText(pr.title)}${pr.draft ? " [draft]" : ""}`);
+    lines.push(`  Review: ${safeText(pr.review ?? "unavailable")} · Checks: ${safeText(pr.checks ?? "unavailable")}`);
+    lines.push(`  ${pr.url}`);
+  });
+  return { lines, selectedLine };
 }
 
 export function moveSelection(selected: number, count: number, direction: "up" | "down"): number {
@@ -56,14 +73,16 @@ export async function runDashboard(): Promise<void> {
   let notice = projectLoadNotice("registry");
   let registryLoaded = false;
   let initialLoadPending = true;
+  let actionPending = false;
+  let detailOffset = 0;
   const refresh = new GithubRefresh();
   const actions = new ProjectActions();
-  const layout = new BoxRenderable(renderer, { flexDirection: "column", padding: 1, gap: 1, width: "100%", height: "100%" });
+  const layout = new BoxRenderable(renderer, { flexDirection: "column", padding: 1, gap: 0, width: "100%", height: "100%" });
   const title = new TextRenderable(renderer, { content: "Wolf Den", fg: "#9fd4ff" });
   const list = new TextRenderable(renderer, { content: "", fg: "#ffffff" });
   const detail = new TextRenderable(renderer, { content: "", fg: "#d6e4ee" });
   const message = new TextRenderable(renderer, { content: "", fg: "#ffd58a" });
-  const footer = new TextRenderable(renderer, { content: "↑/↓ project · Tab PR · e editor · o terminal · g repo · p PR · r refresh · ? help · q quit", fg: "#9aa9b7" });
+  const footer = new TextRenderable(renderer, { content: "", fg: "#9aa9b7" });
   layout.add(title);
   layout.add(list);
   layout.add(detail);
@@ -73,27 +92,40 @@ export async function runDashboard(): Promise<void> {
 
   const render = () => {
     if (destroyed) return;
-    list.content = states.length ? states.map((state, index) => `${index === selected ? "❯" : " "} ${safeText(state.project.name)}  ${gitLabel(state)}  ·  ${githubLabel(state)}`).join("\n") : notice;
-    detail.content = showingHelp
-      ? "Keyboard shortcuts\n↑/↓  Select project\nTab  Select next PR (first press selects the first PR)\ne  Open project in VS Code\no  Open terminal in project\ng  Open GitHub repository\np  Open selected PR\nr  Refresh selected project's GitHub data\n?  Close help\nq / Esc / Ctrl+C  Quit"
-      : registryLoaded ? details(states[selected], selectedPr) : notice;
-    message.content = notice;
+    const width = Math.max(1, renderer.terminalWidth - 2);
+    const available = Math.max(2, renderer.terminalHeight - 6);
+    const listHeight = Math.min(Math.max(1, Math.floor(available / 3)), Math.max(1, states.length));
+    const detailHeight = Math.max(1, available - listHeight);
+    title.height = 1; list.height = listHeight; detail.height = detailHeight; message.height = 1; footer.height = 1;
+    const listStart = visibleWindow(states.length, selected, listHeight);
+    list.content = states.length ? states.slice(listStart, listStart + listHeight).map((state, offset) =>
+      fitLine(`${listStart + offset === selected ? ">" : " "} ${state.project.name}  ${gitLabel(state)}  ·  ${githubLabel(state)}`, width)).join("\n") : fitLine(notice, width);
+    const view = showingHelp
+      ? { lines: ["Keyboard shortcuts", "↑/↓  Select project", "Tab  Select next PR", "e  Open project in VS Code", "o  Open terminal in project", "g  Open GitHub repository", "p  Open selected PR", "r  Refresh selected project's GitHub data", "PgUp/PgDn  Scroll details", "?  Close help", "q / Esc / Ctrl+C  Quit"], selectedLine: 0 }
+      : registryLoaded ? detailLines(states[selected], selectedPr) : { lines: [notice], selectedLine: 0 };
+    detailOffset = Math.min(detailOffset, Math.max(0, view.lines.length - detailHeight));
+    detail.content = view.lines.slice(detailOffset, detailOffset + detailHeight).map(line => fitLine(line, width)).join("\n");
+    message.content = fitLine(notice, width);
+    footer.content = fitLine(width < 45 ? "? help · q quit · ↑/↓ project · Tab PR" : "? help · q quit · ↑/↓ project · Tab PR · e editor · o terminal · g repo · p PR · r refresh", width);
   };
   const onKey = (key: KeyEvent) => {
     if (key.name === "q" || key.name === "escape") { renderer.destroy(); return; }
     if (key.name === "?") { showingHelp = !showingHelp; render(); return; }
+    if (key.name === "pageup" || key.name === "pagedown") { detailOffset = Math.max(0, detailOffset + (key.name === "pageup" ? -5 : 5)); render(); return; }
     if (showingHelp) return;
     const state = states[selected];
     if (key.name === "tab") {
       const data = state?.github.kind === "available" ? state.github : undefined;
       if (!data?.pullRequests.length) { notice = "No available PRs to select for this project."; render(); return; }
       selectedPr = (selectedPr + 1) % data.pullRequests.length;
+      detailOffset = Math.max(0, detailLines(state, selectedPr).selectedLine - 2);
       notice = `Selected PR #${data.pullRequests[selectedPr]!.number}.`;
       render(); return;
     }
     if (key.name === "r") {
       if (!state || initialLoadPending) { notice = "No project is ready for refresh."; render(); return; }
       if (!state.project.repository) { notice = "No GitHub repository configured for this project."; render(); return; }
+      if (state.github.kind === "loading") { notice = "GitHub refresh is already in progress."; render(); return; }
       selectedPr = -1;
       notice = `Refreshing GitHub for ${safeText(state.project.name)}…`;
       void refresh.refresh(state, github => { if (!destroyed) { state.github = github; notice = github.kind === "unavailable" || github.kind === "stale" ? github.reason : github.kind === "available" ? "GitHub refreshed." : notice; render(); } });
@@ -101,6 +133,9 @@ export async function runDashboard(): Promise<void> {
     }
     if (["e", "o", "g", "p"].includes(key.name)) {
       if (!state || initialLoadPending) { notice = "No project is ready for actions."; render(); return; }
+      if (actionPending) { notice = "An action is already launching."; render(); return; }
+      actionPending = true;
+      notice = "Launching action…"; render();
       const pr = state.github.kind === "available" ? state.github.pullRequests[selectedPr] : undefined;
       const action = key.name === "e" ? actions.editor(state.project)
         : key.name === "o" ? actions.terminal(state.project)
@@ -108,17 +143,31 @@ export async function runDashboard(): Promise<void> {
         : pr ? actions.pullRequest(state.project, pr) : Promise.reject(new Error("Select an available PR with Tab first."));
       const launched = key.name === "e" ? "VS Code" : key.name === "o" ? "Terminal" : key.name === "g" ? "Repository opener" : `PR #${pr?.number} opener`;
       void action.then(() => { if (!destroyed) { notice = `${launched} launched for ${safeText(state.project.name)}.`; render(); } })
-        .catch((error: unknown) => { if (!destroyed) { notice = error instanceof Error ? error.message : "Action failed."; render(); } });
+        .catch((error: unknown) => { if (!destroyed) { notice = error instanceof Error ? safeText(error.message) : "Action failed."; render(); } })
+        .finally(() => { actionPending = false; });
       return;
     }
-    if (key.name === "up" || key.name === "down") { selected = moveSelection(selected, states.length, key.name); selectedPr = -1; notice = states[selected] ? `Selected ${safeText(states[selected]!.project.name)}.` : projectLoadNotice("ready"); }
+    if (key.name === "up" || key.name === "down") { selected = moveSelection(selected, states.length, key.name); selectedPr = -1; detailOffset = 0; notice = states[selected] ? `Selected ${safeText(states[selected]!.project.name)}.` : projectLoadNotice("ready"); }
     else return;
     render();
   };
   renderer.keyInput.on("keypress", onKey);
+  renderer.on("resize", render);
+  const onRendererError = () => {
+    if (!destroyed) {
+      renderer.destroy();
+      process.stderr.write("Wolf Den stopped after a terminal rendering error.\n");
+      process.exitCode = 1;
+    }
+  };
+  renderer.on("render:error", onRendererError);
+  renderer.on("handler:error", onRendererError);
   renderer.once("destroy", () => {
     destroyed = true;
     renderer.keyInput.off("keypress", onKey);
+    renderer.off("resize", render);
+    renderer.off("render:error", onRendererError);
+    renderer.off("handler:error", onRendererError);
   });
   render();
 
@@ -129,7 +178,9 @@ export async function runDashboard(): Promise<void> {
     states = projects.map(project => ({ project, git: { kind: "loading" }, github: project.repository ? { kind: "loading" } : { kind: "unavailable", reason: "No GitHub repository configured." } }));
     notice = projectLoadNotice("loading", projects.length);
     render();
-    states = await loadProjectStates(projects);
+    states = await loadProjectStates(projects, undefined, undefined, (state, index) => {
+      if (!destroyed) { states[index] = state; render(); }
+    });
     if (destroyed) return;
     initialLoadPending = false;
     notice = projectLoadNotice("ready", states.length);

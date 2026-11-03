@@ -27,3 +27,18 @@ test("remote failures preserve local Git and other projects", async () => {
   assert.equal(states[0]?.github.kind, "unavailable");
   assert.equal(states[1]?.github.kind, "available");
 });
+
+test("local Git update is emitted while GitHub is still pending", async () => {
+  const project = {id: "one", name: "One", path: "/one", repository: "owner/one", lifecycle: "active"};
+  let release: (() => void) | undefined;
+  const updates: string[] = [];
+  const loading = loadProjectStates([project],
+    async () => ({kind: "available", branch: "main", detached: false, staged: false, unstaged: false, untracked: false, clean: true}),
+    async () => { await new Promise<void>(resolve => { release = resolve; }); return {kind: "unavailable", reason: "Offline."}; },
+    state => { updates.push(`${state.git.kind}/${state.github.kind}`); });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(updates, ["available/loading"]);
+  release?.();
+  await loading;
+  assert.deepEqual(updates, ["available/loading", "available/unavailable"]);
+});
