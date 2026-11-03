@@ -1,4 +1,4 @@
-import { BoxRenderable, TextRenderable, createCliRenderer, type KeyEvent } from "@opentui/core";
+import { BoxRenderable, TextRenderable, createCliRenderer, measureEditText, type KeyEvent, type WidthMethod } from "@opentui/core";
 import { ProjectActions } from "./actions.js";
 import type { ProjectState } from "./domain.js";
 import { GithubRefresh, loadProjectStates } from "./projects.js";
@@ -14,10 +14,24 @@ function gitLabel(state: ProjectState): string {
 
 function safeText(value: string): string { return value.replace(/[\x00-\x1f\x7f-\x9f]/g, " "); }
 
-export function fitLine(value: string, width: number): string {
-  const chars = Array.from(safeText(value));
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+export function fitLine(value: string, width: number, widthMethod: WidthMethod = "unicode"): string {
+  const text = safeText(value);
   if (width <= 0) return "";
-  return chars.length <= width ? chars.join("") : `${chars.slice(0, Math.max(0, width - 1)).join("")}…`;
+  const measure = (candidate: string) => measureEditText(candidate, { widthMethod });
+  if (measure(text) <= width) return text;
+  const ellipsis = "…";
+  const budget = Math.max(0, width - measure(ellipsis));
+  const segments = Array.from(graphemes.segment(text), part => part.segment);
+  let low = 0;
+  let high = segments.length;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (measure(segments.slice(0, middle).join("")) <= budget) low = middle;
+    else high = middle - 1;
+  }
+  return segments.slice(0, low).join("") + ellipsis;
 }
 
 export function visibleWindow(total: number, selected: number, height: number): number {
@@ -99,14 +113,14 @@ export async function runDashboard(): Promise<void> {
     title.height = 1; list.height = listHeight; detail.height = detailHeight; message.height = 1; footer.height = 1;
     const listStart = visibleWindow(states.length, selected, listHeight);
     list.content = states.length ? states.slice(listStart, listStart + listHeight).map((state, offset) =>
-      fitLine(`${listStart + offset === selected ? ">" : " "} ${state.project.name}  ${gitLabel(state)}  ·  ${githubLabel(state)}`, width)).join("\n") : fitLine(notice, width);
+      fitLine(`${listStart + offset === selected ? ">" : " "} ${state.project.name}  ${gitLabel(state)}  ·  ${githubLabel(state)}`, width, renderer.widthMethod)).join("\n") : fitLine(notice, width, renderer.widthMethod);
     const view = showingHelp
       ? { lines: ["Keyboard shortcuts", "↑/↓  Select project", "Tab  Select next PR", "e  Open project in VS Code", "o  Open terminal in project", "g  Open GitHub repository", "p  Open selected PR", "r  Refresh selected project's GitHub data", "PgUp/PgDn  Scroll details", "?  Close help", "q / Esc / Ctrl+C  Quit"], selectedLine: 0 }
       : registryLoaded ? detailLines(states[selected], selectedPr) : { lines: [notice], selectedLine: 0 };
     detailOffset = Math.min(detailOffset, Math.max(0, view.lines.length - detailHeight));
-    detail.content = view.lines.slice(detailOffset, detailOffset + detailHeight).map(line => fitLine(line, width)).join("\n");
-    message.content = fitLine(notice, width);
-    footer.content = fitLine(width < 45 ? "? help · q quit · ↑/↓ project · Tab PR" : "? help · q quit · ↑/↓ project · Tab PR · e editor · o terminal · g repo · p PR · r refresh", width);
+    detail.content = view.lines.slice(detailOffset, detailOffset + detailHeight).map(line => fitLine(line, width, renderer.widthMethod)).join("\n");
+    message.content = fitLine(notice, width, renderer.widthMethod);
+    footer.content = fitLine(width < 45 ? "? help · q quit · ↑/↓ project · Tab PR" : "? help · q quit · ↑/↓ project · Tab PR · e editor · o terminal · g repo · p PR · r refresh", width, renderer.widthMethod);
   };
   const onKey = (key: KeyEvent) => {
     if (key.name === "q" || key.name === "escape") { renderer.destroy(); return; }
