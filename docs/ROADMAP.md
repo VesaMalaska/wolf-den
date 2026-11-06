@@ -1,6 +1,6 @@
 # Wolf Den Roadmap
 
-**Status:** Approved product plan, 2026-11-03. **Current release target:** 0.1.0.
+**Status:** v0.1 implementation merged; real desktop QA pending before the v0.1 release tag. **Next planned milestone:** v0.2 usability and interface redesign, based on first Kitty hands-on testing (2026-11-06).
 
 ## Product goal
 Make it easier to understand project state, identify attention items, and resume development across several independent repositories. Wolf Den is a hybrid: informative dashboard plus a handful of safe quick actions.
@@ -83,8 +83,35 @@ Improve keyboard accessibility, small-screen behavior, clean exit/terminal resto
 
 All slices must be independently reviewable; do not start the next slice before review unless explicitly instructed.
 
-## Beyond 0.1 (not approved for implementation)
-0.2 candidates: 'Where Was I?' resume summary, recent commits, filters/search, cross-repo review queue, optional doc extraction and project discovery. Later ideas: Codex integration, session handovers and notifications. Add only to solve observed needs.
+## v0.2 — Usability and interface redesign (approved direction; implementation pending review)
+First actual use in Kitty confirmed that VS Code (`e`) and repository browser (`g`) launch the correct targets. Local Git and GitHub data are useful, but the current vertical text layout wastes wide-screen space, repeats status/details, and offers little visual hierarchy. The immediate priority is **workflow usability, not new data integrations**.
+
+### Design direction
+- **Wide terminals:** two distinct panels: compact multi-project navigator (left) and selected-project details (right).
+- **Narrow terminals:** a designed compact mode, preserving navigation, clear selection, help/quit and necessary project information.
+- **Navigator:** short project rows and at-a-glance Git/remote signals; selection remains visible while navigating longer lists.
+- **Details:** clear sections for local Git, GitHub/PRs, manual next action and relevant quick actions. Keep PR selection and scrolling usable.
+- **Status and shortcuts:** a stable feedback region/footer that does not push content around or display contradictory messages.
+- **New quick action:** `f` opens the selected project's directory in the desktop file manager via validated path and `xdg-open` (not Nautilus-specific).
+- **Interaction:** preserve existing `↑/↓`, `Tab`, `PgUp/PgDn`, `e`, `o`, `g`, `p`, `r`, `?`, and `q` conventions. Avoid unnecessary focus modes and added dependencies.
+
+**Open UX decision:** whether navigator rows should be maximally compact or show more per-project context. Validate with multiple actual projects and narrow Kitty windows; do not lock this down prematurely.
+
+### v0.2 implementation issues (review individually)
+1. [#9 — Responsive two-panel layout](https://github.com/VesaMalaska/wolf-den/issues/9) — establish wide/compact presentation and layout foundations.
+2. [#10 — Multi-project navigator UX](https://github.com/VesaMalaska/wolf-den/issues/10) — visible selection, scrolling, information density and navigation.
+3. [#11 — Selected-project details and feedback](https://github.com/VesaMalaska/wolf-den/issues/11) — meaningful information hierarchy, PR views and consistent status.
+4. [#12 — File-manager quick action](https://github.com/VesaMalaska/wolf-den/issues/12) — safe `f` launch; may be implemented independently.
+5. [#13 — Real Kitty QA and release gate](https://github.com/VesaMalaska/wolf-den/issues/13) — verify desktop behavior and multi-project usability before release.
+
+### Milestone boundaries
+- Preserve the v0.1 read-only providers and safe launch architecture; no project mutations, AI/orchestration, daemon, database or auto-discovery.
+- Implement as focused, reviewable PRs; require human approval before merging.
+- **v0.1 release gate remains separate:** actual Kitty rendering and graphical quick-action verification still need human sign-off before tagging `v0.1.0`. The v0.2 plan does not imply v0.1 is released.
+- Do not tag v0.2 before visual/manual QA and explicit human approval.
+
+## Later candidates (not approved for implementation)
+'Where Was I?' resume summary, recent commits, filters/search, cross-repo review queue, optional doc extraction and project discovery. Later ideas: Codex integration, session handovers and notifications. Add only to solve observed needs.
 
 ## Success condition
 Launching `wolf-den` gives the developer a dependable local overview and a direct path back to the next task, without opening every repo or maintaining duplicate task records.
