@@ -38,6 +38,30 @@ export function visibleWindow(total: number, selected: number, height: number): 
   return Math.max(0, Math.min(selected - Math.floor(Math.max(1, height) / 2), total - Math.max(1, height)));
 }
 
+const WIDE_MIN_WIDTH = 88;
+const WIDE_MIN_HEIGHT = 8;
+
+export function dashboardLayout(width: number, height: number, projectCount: number) {
+  const columns = Math.max(1, width);
+  const rows = Math.max(1, height);
+  const footerHeight = 1;
+  const headerHeight = rows >= 2 ? 1 : 0;
+  const statusHeight = rows >= 3 ? 1 : 0;
+  const contentHeight = Math.max(0, rows - headerHeight - statusHeight - footerHeight);
+  const wide = columns >= WIDE_MIN_WIDTH && rows >= WIDE_MIN_HEIGHT;
+  if (wide) {
+    const navigatorWidth = Math.min(42, Math.max(26, Math.floor(columns * 0.34)));
+    return { wide, columns, headerHeight, statusHeight, footerHeight, contentHeight,
+      navigatorWidth, dividerWidth: 1, detailWidth: columns - navigatorWidth - 1,
+      navigatorHeight: contentHeight, dividerHeight: contentHeight, detailHeight: contentHeight };
+  }
+  const navigatorHeight = contentHeight === 0 ? 0 : Math.min(Math.max(1, Math.floor(contentHeight / 3)), Math.max(1, projectCount));
+  const dividerHeight = contentHeight > navigatorHeight + 1 ? 1 : 0;
+  return { wide, columns, headerHeight, statusHeight, footerHeight, contentHeight,
+    navigatorWidth: columns, dividerWidth: columns, detailWidth: columns,
+    navigatorHeight, dividerHeight, detailHeight: contentHeight - navigatorHeight - dividerHeight };
+}
+
 function githubLabel(state: ProjectState): string {
   const remote = state.github;
   if (remote.kind === "unavailable") return `GitHub unavailable: ${remote.reason}`;
@@ -47,7 +71,7 @@ function githubLabel(state: ProjectState): string {
   return remote.kind === "stale" ? `GitHub stale: ${counts} · ${remote.reason}` : `GitHub: ${counts}`;
 }
 
-function detailLines(state: ProjectState | undefined, selectedPr: number): { lines: string[]; selectedLine: number } {
+export function detailLines(state: ProjectState | undefined, selectedPr: number): { lines: string[]; selectedLine: number } {
   if (!state) return { lines: ["No projects configured. Add a project to the registry."], selectedLine: 0 };
   const git = state.git;
   const changes = git.kind === "available"
@@ -91,40 +115,55 @@ export async function runDashboard(): Promise<void> {
   let detailOffset = 0;
   const refresh = new GithubRefresh();
   const actions = new ProjectActions();
-  const layout = new BoxRenderable(renderer, { flexDirection: "column", padding: 1, gap: 0, width: "100%", height: "100%" });
+  const layout = new BoxRenderable(renderer, { flexDirection: "column", gap: 0, width: "100%", height: "100%" });
   const title = new TextRenderable(renderer, { content: "Wolf Den", fg: "#9fd4ff" });
+  const panels = new BoxRenderable(renderer, { flexDirection: "row", gap: 0, width: "100%" });
   const list = new TextRenderable(renderer, { content: "", fg: "#ffffff" });
+  const divider = new TextRenderable(renderer, { content: "", fg: "#668198" });
   const detail = new TextRenderable(renderer, { content: "", fg: "#d6e4ee" });
   const message = new TextRenderable(renderer, { content: "", fg: "#ffd58a" });
   const footer = new TextRenderable(renderer, { content: "", fg: "#9aa9b7" });
   layout.add(title);
-  layout.add(list);
-  layout.add(detail);
+  panels.add(list);
+  panels.add(divider);
+  panels.add(detail);
+  layout.add(panels);
   layout.add(message);
   layout.add(footer);
   renderer.root.add(layout);
 
   const render = () => {
     if (destroyed) return;
-    const width = Math.max(1, renderer.terminalWidth - 2);
-    const available = Math.max(2, renderer.terminalHeight - 6);
-    const listHeight = Math.min(Math.max(1, Math.floor(available / 3)), Math.max(1, states.length));
-    const detailHeight = Math.max(1, available - listHeight);
-    title.height = 1; list.height = listHeight; detail.height = detailHeight; message.height = 1; footer.height = 1;
-    const listStart = visibleWindow(states.length, selected, listHeight);
-    list.content = states.length ? states.slice(listStart, listStart + listHeight).map((state, offset) =>
-      fitLine(`${listStart + offset === selected ? ">" : " "} ${state.project.name}  ${gitLabel(state)}  ·  ${githubLabel(state)}`, width, renderer.widthMethod)).join("\n") : fitLine(notice, width, renderer.widthMethod);
+    const dimensions = dashboardLayout(renderer.terminalWidth, renderer.terminalHeight, states.length);
+    panels.flexDirection = dimensions.wide ? "row" : "column";
+    title.height = dimensions.headerHeight;
+    panels.height = dimensions.contentHeight;
+    list.width = dimensions.navigatorWidth; list.height = dimensions.navigatorHeight;
+    divider.width = dimensions.dividerWidth; divider.height = dimensions.dividerHeight;
+    detail.width = dimensions.detailWidth; detail.height = dimensions.detailHeight;
+    message.height = dimensions.statusHeight; footer.height = dimensions.footerHeight;
+    title.content = fitLine("🐺 Wolf Den", dimensions.columns, renderer.widthMethod);
+    const navigatorHeading = dimensions.wide && dimensions.navigatorHeight > 1 ? 1 : 0;
+    const navigatorRows = dimensions.navigatorHeight - navigatorHeading;
+    const listStart = visibleWindow(states.length, selected, navigatorRows);
+    const projectRows = states.length ? states.slice(listStart, listStart + navigatorRows).map((state, offset) =>
+      fitLine(`${listStart + offset === selected ? ">" : " "} ${state.project.name}`, dimensions.navigatorWidth, renderer.widthMethod)) : [fitLine("No projects configured", dimensions.navigatorWidth, renderer.widthMethod)];
+    list.content = [...(navigatorHeading ? ["Projects"] : []), ...projectRows].join("\n");
+    divider.content = dimensions.wide ? Array(dimensions.dividerHeight).fill("│").join("\n") : "─".repeat(dimensions.dividerWidth);
     const view = showingHelp
       ? { lines: ["Keyboard shortcuts", "↑/↓  Select project", "Tab  Select next PR", "e  Open project in VS Code", "o  Open terminal in project", "g  Open GitHub repository", "p  Open selected PR", "r  Refresh selected project's GitHub data", "PgUp/PgDn  Scroll details", "?  Close help", "q / Esc / Ctrl+C  Quit"], selectedLine: 0 }
       : registryLoaded ? detailLines(states[selected], selectedPr) : { lines: [notice], selectedLine: 0 };
-    detailOffset = Math.min(detailOffset, Math.max(0, view.lines.length - detailHeight));
-    detail.content = view.lines.slice(detailOffset, detailOffset + detailHeight).map(line => fitLine(line, width, renderer.widthMethod)).join("\n");
-    message.content = fitLine(notice, width, renderer.widthMethod);
-    footer.content = fitLine(width < 45 ? "? help · q quit · ↑/↓ project · Tab PR" : "? help · q quit · ↑/↓ project · Tab PR · e editor · o terminal · g repo · p PR · r refresh", width, renderer.widthMethod);
+    detailOffset = Math.min(detailOffset, Math.max(0, view.lines.length - dimensions.detailHeight));
+    detail.content = view.lines.slice(detailOffset, detailOffset + dimensions.detailHeight).map(line => fitLine(line, dimensions.detailWidth, renderer.widthMethod)).join("\n");
+    message.content = fitLine(notice, dimensions.columns, renderer.widthMethod);
+    const shortcuts = dimensions.columns < 18 ? "? q" : dimensions.columns < 45
+      ? "? help · q quit · ↑/↓ project · Tab PR"
+      : "? help · q quit · ↑/↓ project · Tab PR · PgUp/PgDn scroll · e editor · o terminal · g repo · p PR · r refresh";
+    footer.content = fitLine(shortcuts, dimensions.columns, renderer.widthMethod);
   };
   const onKey = (key: KeyEvent) => {
     if (key.name === "q" || key.name === "escape") { renderer.destroy(); return; }
-    if (key.name === "?") { showingHelp = !showingHelp; render(); return; }
+    if (key.name === "?") { showingHelp = !showingHelp; detailOffset = 0; render(); return; }
     if (key.name === "pageup" || key.name === "pagedown") { detailOffset = Math.max(0, detailOffset + (key.name === "pageup" ? -5 : 5)); render(); return; }
     if (showingHelp) return;
     const state = states[selected];
