@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { dashboardLayout, detailLines, fitLine, moveSelection, projectLoadNotice, visibleWindow } from "../src/ui.js";
+import { clampSelection, dashboardLayout, detailLines, fitLine, moveProjectSelection, moveSelection, navigatorRow, navigatorView, projectLoadNotice, visibleWindow } from "../src/ui.js";
 import type { ProjectState } from "../src/domain.js";
 
 test("wide layout keeps separate panels and fixed feedback rows", () => {
@@ -62,6 +62,67 @@ test("navigation clamps to the available project range", () => {
   assert.equal(moveSelection(0, 2, "up"), 0);
   assert.equal(moveSelection(0, 2, "down"), 1);
   assert.equal(moveSelection(1, 2, "down"), 1);
+  assert.equal(clampSelection(12, 5), 4);
+  assert.equal(clampSelection(-2, 1), 0);
+  assert.equal(moveSelection(12, 5, "up"), 3);
+  assert.deepEqual(moveProjectSelection(1, 2, 3, "down"), { selected: 2, selectedPr: -1 });
+  assert.deepEqual(moveProjectSelection(2, 2, 3, "down"), { selected: 2, selectedPr: 2 });
+  assert.deepEqual(moveProjectSelection(0, -1, 0, "down"), { selected: 0, selectedPr: -1 });
+});
+
+function projectState(index: number): ProjectState {
+  return {
+    project: { id: `p${index}`, name: index === 11 ? "Pitkä projekti 界界 🐺" : `Project ${index}`, path: `/tmp/p${index}`, lifecycle: "active" },
+    git: { kind: "available", branch: "feature/nav", detached: false, staged: false, unstaged: false, untracked: false, clean: index % 2 === 0 },
+    github: { kind: "unavailable", reason: "Not configured" },
+  };
+}
+
+test("navigator presents local branch and clean or dirty status without remote counts", () => {
+  const clean = navigatorRow(projectState(0), 42, false, "unicode-wide");
+  const dirty = navigatorRow(projectState(1), 42, true, "unicode-wide");
+  assert.match(clean.text, /Project 0.*feature\/nav · clean/);
+  assert.match(dirty.text, /▌ Project 1.*feature\/nav · dirty/);
+  assert.equal(dirty.text.length, 42);
+  const loading = projectState(2);
+  loading.git = { kind: "loading" };
+  loading.project.repository = "example/p2";
+  loading.github = { kind: "loading" };
+  assert.match(navigatorRow(loading, 42, false).text, /git… GH…/);
+  loading.git = { kind: "unavailable", reason: "Missing" };
+  loading.github = { kind: "stale", previous: { kind: "available", issues: 3, pullRequests: [] }, reason: "Offline" };
+  assert.match(navigatorRow(loading, 42, false).text, /git n\/a GH~/);
+  loading.github = { kind: "unavailable", reason: "Offline" };
+  assert.match(navigatorRow(loading, 42, false).text, /GH!/);
+});
+
+test("twelve project viewport retains selected row across navigation and resizing", () => {
+  const states = Array.from({ length: 12 }, (_, index) => projectState(index));
+  for (const [width, height] of [[120, 24], [40, 15], [30, 9], [88, 8]]) {
+    const layout = dashboardLayout(width!, height!, states.length);
+    const rows = layout.navigatorHeight - (layout.wide && layout.navigatorHeight > 1 ? 1 : 0);
+    for (let selected = 0; selected < states.length; selected++) {
+      const view = navigatorView(states, selected, rows, layout.navigatorWidth, "unicode-wide");
+      assert.ok(view.start <= selected && selected < view.start + rows);
+      assert.equal(view.rows.filter(row => row.selected).length, 1);
+      assert.ok(view.rows.every(row => row.text.length <= layout.navigatorWidth));
+      assert.match(detailLines(states[view.index], -1).lines[0]!, new RegExp(states[selected]!.project.name));
+    }
+  }
+  assert.equal(navigatorView([], 99, 3, 40).index, 0);
+  assert.equal(navigatorView(states.slice(0, 1), 99, 3, 40).index, 0);
+  assert.equal(navigatorView(states.slice(0, 5), 99, 3, 40).index, 4);
+  assert.equal(visibleWindow(12, 99, 3), 9);
+  assert.equal(visibleWindow(12, 11, 0), 0);
+});
+
+test("long Unicode names clip safely in narrow navigator rows", () => {
+  const state = projectState(11);
+  const selected = navigatorRow(state, 16, true, "unicode-wide");
+  assert.ok(selected.text.startsWith("▌ "));
+  assert.ok(selected.text.includes("…"));
+  assert.ok(!selected.text.includes("feature/nav"));
+  assert.ok(navigatorRow(state, 2, true, "unicode-wide").text.length <= 2);
 });
 
 test("startup, loading, ready and empty registry notices match project state", () => {
