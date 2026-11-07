@@ -4,14 +4,6 @@ import type { ProjectState } from "./domain.js";
 import { GithubRefresh, loadProjectStates } from "./projects.js";
 import { loadRegistry, RegistryError } from "./registry.js";
 
-function gitLabel(state: ProjectState): string {
-  const git = state.git;
-  if (git.kind === "loading") return "Loading Git state…";
-  if (git.kind === "unavailable") return `Git unavailable: ${git.reason}`;
-  if (git.kind === "stale") return `Git stale: ${git.reason}`;
-  return `${git.branch} · ${git.clean ? "clean" : "dirty"}`;
-}
-
 function safeText(value: string): string { return value.replace(/[\x00-\x1f\x7f-\x9f]/g, " "); }
 
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
@@ -169,32 +161,77 @@ export function dashboardLayout(width: number, height: number, projectCount: num
     navigatorHeight, dividerHeight, detailHeight: contentHeight - navigatorHeight - dividerHeight };
 }
 
-function githubLabel(state: ProjectState): string {
-  const remote = state.github;
-  if (remote.kind === "unavailable") return `GitHub unavailable: ${remote.reason}`;
-  if (remote.kind === "loading") return `GitHub loading…${remote.previous ? " (previous data shown below)" : ""}`;
-  const data = remote.kind === "stale" ? remote.previous : remote;
-  const counts = `${data.issues} open issues · ${data.pullRequests.length} open PRs`;
-  return remote.kind === "stale" ? `GitHub stale: ${counts} · ${remote.reason}` : `GitHub: ${counts}`;
+type DetailTone = "heading" | "title" | "muted" | "normal" | "good" | "warn" | "error" | "selected";
+type DetailRow = { text: string; tone: DetailTone };
+
+function wrapped(value: string, width: number, widthMethod: WidthMethod): string[] {
+  const available = Math.max(1, width);
+  const parts = Array.from(graphemes.segment(safeText(value)), part => part.segment);
+  const lines: string[] = [];
+  let current = "";
+  for (const part of parts) {
+    if (current && measureEditText(current + part, { widthMethod }) > available) {
+      lines.push(current); current = "";
+    }
+    current += part;
+  }
+  lines.push(current);
+  return lines;
 }
 
-export function detailLines(state: ProjectState | undefined, selectedPr: number): { lines: string[]; selectedLine: number } {
-  if (!state) return { lines: ["No projects configured. Add a project to the registry."], selectedLine: 0 };
+export function detailLines(state: ProjectState | undefined, selectedPr: number, width = 80, widthMethod: WidthMethod = "unicode"): { lines: string[]; rows: DetailRow[]; selectedLine: number } {
+  const rows: DetailRow[] = [];
+  const add = (text: string, tone: DetailTone = "normal") => rows.push({ text, tone });
+  const section = (label: string) => { if (rows.length) add("", "muted"); add(`  ${label}`, "heading"); };
+  if (!state) { add("  No projects configured. Add a project to the registry.", "muted"); return { lines: rows.map(row => row.text), rows, selectedLine: 0 }; }
+  add(`  ${safeText(state.project.name)}`, "title");
+  add(`  ${safeText(state.project.lifecycle)}  ·  ${safeText(state.project.path)}`, "muted");
+  section("NEXT ACTION");
+  for (const line of wrapped(state.project.nextAction ?? "Not set", Math.max(1, width - 4), widthMethod)) add(`    ${line}`, state.project.nextAction ? "normal" : "muted");
+  section("LOCAL GIT");
   const git = state.git;
-  const changes = git.kind === "available"
-    ? `Changes: ${git.clean ? "none" : [git.staged && "staged", git.unstaged && "unstaged", git.untracked && "untracked"].filter(Boolean).join(", ")}`
-    : "";
+  if (git.kind === "loading") add("    Loading Git state…", "muted");
+  else if (git.kind === "unavailable") add(`    Unavailable · ${safeText(git.reason)}`, "error");
+  else if (git.kind === "stale") add(`    Stale · ${safeText(git.previous.branch)} · ${safeText(git.reason)}`, "warn");
+  else {
+    add(`    ${git.detached ? "Detached HEAD" : `Branch ${safeText(git.branch)}`}  ·  ${git.clean ? "Clean" : "Dirty"}`, git.clean ? "good" : "warn");
+    if (!git.clean) add(`    ${[git.staged && "staged", git.unstaged && "unstaged", git.untracked && "untracked"].filter(Boolean).join(" · ")}`, "muted");
+  }
+  section("GITHUB");
   const remote = state.github;
   const data = remote.kind === "available" ? remote : remote.kind === "stale" || remote.kind === "loading" ? remote.previous : undefined;
-  const lines = [safeText(state.project.name), `Lifecycle: ${safeText(state.project.lifecycle)}`, `Next action: ${safeText(state.project.nextAction ?? "Not set")}`, `Directory: ${safeText(state.project.path)}`, gitLabel(state), changes, githubLabel(state)].filter(Boolean);
+  if (remote.kind === "unavailable") add(`    Unavailable · ${safeText(remote.reason)}`, "error");
+  else {
+    if (remote.kind === "loading") add(`    Loading${data ? " · previous data below" : "…"}`, "muted");
+    if (remote.kind === "stale") add(`    Stale · ${safeText(remote.reason)}`, "warn");
+    if (data) add(`    ${data.issues} open issues  ·  ${data.pullRequests.length} open PRs${remote.kind === "available" ? "" : " (previous)"}`, remote.kind === "available" ? "normal" : "warn");
+  }
   let selectedLine = 0;
-  data?.pullRequests.forEach((pr, index) => {
-    if (index === selectedPr) selectedLine = lines.length;
-    lines.push(`${index === selectedPr ? ">" : " "} #${pr.number} ${safeText(pr.title)}${pr.draft ? " [draft]" : ""}`);
-    lines.push(`  Review: ${safeText(pr.review ?? "unavailable")} · Checks: ${safeText(pr.checks ?? "unavailable")}`);
-    lines.push(`  ${pr.url}`);
-  });
-  return { lines, selectedLine };
+  if (data?.pullRequests.length) {
+    section("PULL REQUESTS");
+    data.pullRequests.forEach((pr, index) => {
+      if (index > 0) add("", "muted");
+      if (index === selectedPr) selectedLine = rows.length;
+      const prefix = `${index === selectedPr ? "  ▌" : "   "} #${pr.number} `;
+      const suffix = pr.draft ? " [draft]" : "";
+      const titleWidth = Math.max(1, width - measureEditText(prefix + suffix, { widthMethod }));
+      const titleLines = wrapped(pr.title, titleWidth, widthMethod);
+      titleLines.forEach((line, lineIndex) => add(`${lineIndex === 0 ? prefix : "      "}${line}${lineIndex === 0 ? suffix : ""}`, index === selectedPr ? "selected" : "normal"));
+      add(`      Review ${safeText(pr.review ?? "unavailable")}  ·  Checks ${safeText(pr.checks ?? "unavailable")}`, "muted");
+    });
+  }
+  if (width >= 38) { section("QUICK ACTIONS"); add("    e editor  ·  o terminal  ·  g repo  ·  p PR", "muted"); }
+  return { lines: rows.map(row => row.text), rows, selectedLine };
+}
+
+export function scrollToLine(offset: number, line: number, height: number): number {
+  if (height <= 0) return Math.max(0, line);
+  return line < offset ? line : line >= offset + height ? line - height + 1 : offset;
+}
+
+export type Feedback = { kind: "loading" | "success" | "error" | "unavailable" | "info"; text: string; projectId?: string };
+export function feedbackForSelection(feedback: Feedback, projectId?: string): Feedback {
+  return feedback.projectId && feedback.projectId !== projectId ? { kind: "info", text: "Select a project to view its current status." } : feedback;
 }
 
 export function moveSelection(selected: number, count: number, direction: "up" | "down"): number {
@@ -219,7 +256,7 @@ export async function runDashboard(): Promise<void> {
   let selected = 0;
   let selectedPr = -1;
   let showingHelp = false;
-  let notice = projectLoadNotice("registry");
+  let feedback: Feedback = { kind: "loading", text: projectLoadNotice("registry") };
   let registryLoaded = false;
   let initialLoadPending = true;
   let actionPending = false;
@@ -264,10 +301,22 @@ export async function runDashboard(): Promise<void> {
     divider.content = dimensions.wide ? Array(dimensions.dividerHeight).fill("│").join("\n") : "─".repeat(dimensions.dividerWidth);
     const view = showingHelp
       ? { lines: ["Keyboard shortcuts", "↑/↓  Select project", "Tab  Select next PR", "e  Open project in VS Code", "o  Open terminal in project", "g  Open GitHub repository", "p  Open selected PR", "r  Refresh selected project's GitHub data", "PgUp/PgDn  Scroll details", "?  Close help", "q / Esc / Ctrl+C  Quit"], selectedLine: 0 }
-      : registryLoaded ? detailLines(states[selected], selectedPr) : { lines: [notice], selectedLine: 0 };
+      : registryLoaded ? detailLines(states[selected], selectedPr, dimensions.detailWidth, renderer.widthMethod) : { lines: [feedback.text], selectedLine: 0 };
     detailOffset = Math.min(detailOffset, Math.max(0, view.lines.length - dimensions.detailHeight));
-    detail.content = view.lines.slice(detailOffset, detailOffset + dimensions.detailHeight).map(line => fitLine(line, dimensions.detailWidth, renderer.widthMethod)).join("\n");
-    message.content = fitLine(notice, dimensions.columns, renderer.widthMethod);
+    const tones: Record<DetailTone, string> = { heading: "#849bab", title: "#f0f7fc", muted: "#91a8b8", normal: "#d6e4ee", good: "#9bd6ac", warn: "#e7bd83", error: "#ed9a9a", selected: "#f7fbff" };
+    detail.content = "rows" in view && view.rows
+      ? new StyledText(view.rows.slice(detailOffset, detailOffset + dimensions.detailHeight).flatMap((row, index, visible) => {
+          const line = fitLine(row.text, dimensions.detailWidth, renderer.widthMethod);
+          const content = row.tone === "title" || row.tone === "heading" || row.tone === "selected" ? bold(line) : line;
+          const styled = fg(tones[row.tone])(row.tone === "selected" ? bg("#29465c")(content) : content);
+          return index === visible.length - 1 ? [styled] : [styled, fg(tones.muted)("\n")];
+        }))
+      : view.lines.slice(detailOffset, detailOffset + dimensions.detailHeight).map(line => fitLine(line, dimensions.detailWidth, renderer.widthMethod)).join("\n");
+    const shown = feedbackForSelection(feedback, states[selected]?.project.id);
+    const labels = { loading: "…", success: "✓", error: "!", unavailable: "!", info: "·" };
+    const colors = { loading: "#9fc8de", success: "#9bd6ac", error: "#ed9a9a", unavailable: "#e7bd83", info: "#a8b9c7" };
+    message.fg = colors[shown.kind];
+    message.content = fitLine(`${labels[shown.kind]} ${shown.text}`, dimensions.columns, renderer.widthMethod);
     const shortcuts = dimensions.columns < 18 ? "? q" : dimensions.columns < 45
       ? "? help · q quit · ↑/↓ project · Tab PR"
       : "? help · q quit · ↑/↓ project · Tab PR · PgUp/PgDn scroll · e editor · o terminal · g repo · p PR · r refresh";
@@ -281,34 +330,34 @@ export async function runDashboard(): Promise<void> {
     const state = states[selected];
     if (key.name === "tab") {
       const data = state?.github.kind === "available" ? state.github : undefined;
-      if (!data?.pullRequests.length) { notice = "No available PRs to select for this project."; render(); return; }
+      if (!data?.pullRequests.length) { feedback = { kind: "unavailable", text: "No available PRs to select for this project.", projectId: state?.project.id }; render(); return; }
       selectedPr = (selectedPr + 1) % data.pullRequests.length;
-      detailOffset = Math.max(0, detailLines(state, selectedPr).selectedLine - 2);
-      notice = `Selected PR #${data.pullRequests[selectedPr]!.number}.`;
+      detailOffset = scrollToLine(detailOffset, detailLines(state, selectedPr, dashboardLayout(renderer.terminalWidth, renderer.terminalHeight, states.length).detailWidth, renderer.widthMethod).selectedLine, dashboardLayout(renderer.terminalWidth, renderer.terminalHeight, states.length).detailHeight);
+      feedback = { kind: "info", text: `Selected PR #${data.pullRequests[selectedPr]!.number}.`, projectId: state!.project.id };
       render(); return;
     }
     if (key.name === "r") {
-      if (!state || initialLoadPending) { notice = "No project is ready for refresh."; render(); return; }
-      if (!state.project.repository) { notice = "No GitHub repository configured for this project."; render(); return; }
-      if (state.github.kind === "loading") { notice = "GitHub refresh is already in progress."; render(); return; }
+      if (!state || initialLoadPending) { feedback = { kind: "unavailable", text: "No project is ready for refresh." }; render(); return; }
+      if (!state.project.repository) { feedback = { kind: "unavailable", text: "No GitHub repository configured for this project.", projectId: state.project.id }; render(); return; }
+      if (state.github.kind === "loading") { feedback = { kind: "loading", text: `GitHub refresh is already in progress for ${safeText(state.project.name)}.`, projectId: state.project.id }; render(); return; }
       selectedPr = -1;
-      notice = `Refreshing GitHub for ${safeText(state.project.name)}…`;
-      void refresh.refresh(state, github => { if (!destroyed) { state.github = github; notice = github.kind === "unavailable" || github.kind === "stale" ? github.reason : github.kind === "available" ? "GitHub refreshed." : notice; render(); } });
+      feedback = { kind: "loading", text: `Refreshing GitHub for ${safeText(state.project.name)}…`, projectId: state.project.id }; render();
+      void refresh.refresh(state, github => { if (!destroyed) { state.github = github; if (github.kind !== "loading" && states[selected]?.project.id === state.project.id) feedback = { kind: github.kind === "available" ? "success" : "unavailable", text: github.kind === "available" ? `GitHub refreshed for ${safeText(state.project.name)}.` : `GitHub ${github.kind} for ${safeText(state.project.name)}: ${safeText(github.reason)}`, projectId: state.project.id }; render(); } });
       return;
     }
     if (["e", "o", "g", "p"].includes(key.name)) {
-      if (!state || initialLoadPending) { notice = "No project is ready for actions."; render(); return; }
-      if (actionPending) { notice = "An action is already launching."; render(); return; }
+      if (!state || initialLoadPending) { feedback = { kind: "unavailable", text: "No project is ready for actions." }; render(); return; }
+      if (actionPending) { feedback = { kind: "loading", text: "An action is already launching." }; render(); return; }
       actionPending = true;
-      notice = "Launching action…"; render();
+      feedback = { kind: "loading", text: `Launching action for ${safeText(state.project.name)}…`, projectId: state.project.id }; render();
       const pr = state.github.kind === "available" ? state.github.pullRequests[selectedPr] : undefined;
       const action = key.name === "e" ? actions.editor(state.project)
         : key.name === "o" ? actions.terminal(state.project)
         : key.name === "g" ? actions.repository(state.project)
         : pr ? actions.pullRequest(state.project, pr) : Promise.reject(new Error("Select an available PR with Tab first."));
       const launched = key.name === "e" ? "VS Code" : key.name === "o" ? "Terminal" : key.name === "g" ? "Repository opener" : `PR #${pr?.number} opener`;
-      void action.then(() => { if (!destroyed) { notice = `${launched} launched for ${safeText(state.project.name)}.`; render(); } })
-        .catch((error: unknown) => { if (!destroyed) { notice = error instanceof Error ? safeText(error.message) : "Action failed."; render(); } })
+      void action.then(() => { if (!destroyed && states[selected]?.project.id === state.project.id) { feedback = { kind: "success", text: `${launched} launched for ${safeText(state.project.name)}.`, projectId: state.project.id }; render(); } })
+        .catch((error: unknown) => { if (!destroyed && states[selected]?.project.id === state.project.id) { feedback = { kind: "error", text: `${launched} for ${safeText(state.project.name)} failed: ${error instanceof Error ? safeText(error.message) : "Action failed."}`, projectId: state.project.id }; render(); } })
         .finally(() => { actionPending = false; });
       return;
     }
@@ -316,7 +365,7 @@ export async function runDashboard(): Promise<void> {
       const next = moveProjectSelection(selected, selectedPr, states.length, key.name);
       if (next.selected !== selected) detailOffset = 0;
       selected = next.selected; selectedPr = next.selectedPr;
-      notice = states[selected] ? `Selected ${safeText(states[selected]!.project.name)}.` : projectLoadNotice("ready");
+      feedback = states[selected] ? { kind: "info", text: `Selected ${safeText(states[selected]!.project.name)}.`, projectId: states[selected]!.project.id } : { kind: "info", text: projectLoadNotice("ready") };
     }
     else return;
     render();
@@ -346,18 +395,18 @@ export async function runDashboard(): Promise<void> {
     if (destroyed) return;
     registryLoaded = true;
     states = projects.map(project => ({ project, git: { kind: "loading" }, github: project.repository ? { kind: "loading" } : { kind: "unavailable", reason: "No GitHub repository configured." } }));
-    notice = projectLoadNotice("loading", projects.length);
+    feedback = { kind: "loading", text: projectLoadNotice("loading", projects.length) };
     render();
     states = await loadProjectStates(projects, undefined, undefined, (state, index) => {
       if (!destroyed) { states[index] = state; render(); }
     });
     if (destroyed) return;
     initialLoadPending = false;
-    notice = projectLoadNotice("ready", states.length);
+    feedback = { kind: "success", text: projectLoadNotice("ready", states.length) };
     render();
   } catch (error) {
     if (destroyed) return;
-    notice = error instanceof RegistryError ? error.message : "Could not load project data.";
+    feedback = { kind: "error", text: error instanceof RegistryError ? error.message : "Could not load project data." };
     render();
   }
 }
