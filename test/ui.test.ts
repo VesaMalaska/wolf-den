@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { measureEditText } from "@opentui/core";
-import { clampSelection, dashboardLayout, detailLines, fitLine, moveProjectSelection, moveSelection, navigatorContent, navigatorEntry, navigatorHeadingHeight, navigatorHeadingText, navigatorRow, navigatorView, projectLoadNotice, visibleWindow } from "../src/ui.js";
+import { clampSelection, dashboardLayout, detailLines, feedbackForSelection, fitLine, moveProjectSelection, moveSelection, navigatorContent, navigatorEntry, navigatorHeadingHeight, navigatorHeadingText, navigatorRow, navigatorView, projectLoadNotice, scrollToLine, visibleWindow } from "../src/ui.js";
 import type { ProjectState } from "../src/domain.js";
 
 test("wide layout keeps separate panels and fixed feedback rows", () => {
@@ -45,12 +45,12 @@ test("selected PR stays in details while loading and stale remote state remains 
     github: { kind: "loading", previous },
   };
   const loading = detailLines(state, 0);
-  assert.match(loading.lines.join("\n"), /GitHub loading/);
-  assert.match(loading.lines[loading.selectedLine]!, /^> #9 Layout/);
+  assert.match(loading.lines.join("\n"), /Loading · previous data below/);
+  assert.match(loading.lines[loading.selectedLine]!, /▌ #9 Layout/);
   state.github = { kind: "stale", previous, reason: "Offline" };
-  assert.match(detailLines(state, 0).lines.join("\n"), /GitHub stale:.*Offline/);
+  assert.match(detailLines(state, 0).lines.join("\n"), /Stale · Offline.*2 open issues.*\(previous\)/s);
   state.github = { kind: "unavailable", reason: "Not configured" };
-  assert.match(detailLines(state, -1).lines.join("\n"), /GitHub unavailable: Not configured/);
+  assert.match(detailLines(state, -1).lines.join("\n"), /Unavailable · Not configured/);
   assert.match(detailLines(undefined, -1).lines[0]!, /No projects configured/);
 });
 
@@ -213,4 +213,41 @@ test("line clipping uses OpenTUI cell widths and preserves whole graphemes", () 
 
 test("control characters are replaced before measuring or clipping", () => {
   assert.equal(fitLine("a\nb\u001b", 5, "unicode-wide"), "a b ");
+});
+
+test("detail hierarchy preserves manual action and separates local and remote states", () => {
+  const state = projectState(0);
+  state.project.nextAction = "Review  界界  this exact task";
+  state.git = { kind: "available", branch: "feature/details", detached: false, staged: true, unstaged: false, untracked: true, clean: false };
+  state.github = { kind: "unavailable", reason: "Offline" };
+  const view = detailLines(state, -1, 48, "unicode-wide");
+  assert.deepEqual(view.lines.filter(line => /NEXT ACTION|LOCAL GIT|GITHUB/.test(line)).map(line => line.trim()), ["NEXT ACTION", "LOCAL GIT", "GITHUB"]);
+  assert.ok(view.lines.includes("    Review  界界  this exact task"));
+  assert.match(view.lines.join("\n"), /Branch feature\/details  ·  Dirty.*staged · untracked.*GITHUB.*Unavailable · Offline/s);
+  assert.ok(view.rows.some(row => row.tone === "error"));
+  state.git = { kind: "available", branch: "abc123", detached: true, staged: false, unstaged: false, untracked: false, clean: true };
+  assert.match(detailLines(state, -1).lines.join("\n"), /Detached HEAD  ·  Clean/);
+});
+
+test("long Unicode detail and PR entries wrap within compact width", () => {
+  const state = projectState(11);
+  state.project.nextAction = "Open the very long task with 界界 and 👩‍💻 today";
+  state.github = { kind: "available", issues: 4, pullRequests: Array.from({ length: 12 }, (_, index) => ({
+    number: index + 1, title: `Long pull request title ${index} 界界 👩‍💻 with more words`, url: `https://github.com/example/pull/${index + 1}`,
+    review: "Changes requested", checks: "Pending", draft: index === 11,
+  })) };
+  for (const width of [24, 40, 60]) {
+    const view = detailLines(state, 11, width, "unicode-wide");
+    assert.ok(view.lines.every(line => measureEditText(fitLine(line, width, "unicode-wide"), { widthMethod: "unicode-wide" }) <= width));
+    assert.match(view.lines[view.selectedLine]!, /▌ #12/);
+    assert.match(view.lines.join("\n"), /Review Changes requested  ·  Checks Pending/);
+    assert.equal(scrollToLine(0, view.selectedLine, 5), view.selectedLine - 4);
+    assert.equal(scrollToLine(view.selectedLine - 4, view.selectedLine, 5), view.selectedLine - 4);
+  }
+});
+
+test("delayed feedback is attributed to its project", () => {
+  const result = { kind: "error" as const, text: "Editor failed for Project 1.", projectId: "p1" };
+  assert.deepEqual(feedbackForSelection(result, "p1"), result);
+  assert.deepEqual(feedbackForSelection(result, "p2"), { kind: "info", text: "Select a project to view its current status." });
 });
