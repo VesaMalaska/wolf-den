@@ -19,7 +19,7 @@ test("editor, terminal, file manager, repository and PR use explicit arguments f
     await actions.repository(project);
     await actions.pullRequest(project, { number: 7, title: "PR", url: "https://github.com/owner/repo/pull/7", draft: false, checks: null, review: null });
     assert.deepEqual(calls.map(({ executable, args }) => [executable, args]), [
-      ["code", ["--new-window", path]], ["konsole", ["--workdir", path]],
+      ["code", ["--new-window", path]], ["xdg-terminal-exec", [`--dir=${path}`]],
       ["xdg-open", [path]],
       ["xdg-open", ["https://github.com/owner/repo"]], ["xdg-open", ["https://github.com/owner/repo/pull/7"]],
     ]);
@@ -30,53 +30,45 @@ test("editor, terminal, file manager, repository and PR use explicit arguments f
   } finally { await rm(path, { recursive: true }); }
 });
 
-test("Kitty session prefers Kitty with the selected project's working directory", async () => {
+test("explicit Kitty override uses Kitty with the selected project's working directory", async () => {
   const path = await mkdtemp(join(tmpdir(), "wolf-den-actions-"));
   try {
     const project: Project = { id: "one", name: "One", path, lifecycle: "active" };
     const calls: { executable: string; args: string[]; cwd: unknown }[] = [];
     const actions = new ProjectActions(async (executable, args, options) => {
       calls.push({ executable, args, cwd: options.cwd });
-    }, { DISPLAY: ":0", KITTY_WINDOW_ID: "42" });
+    }, { DISPLAY: ":0" }, "kitty");
     await actions.terminal(project);
     assert.deepEqual(calls, [{ executable: "kitty", args: ["--directory", path], cwd: path }]);
   } finally { await rm(path, { recursive: true }); }
 });
 
-test("missing Kitty falls back to the documented terminal order", async () => {
+test("explicit Konsole override uses only Konsole", async () => {
   const path = await mkdtemp(join(tmpdir(), "wolf-den-actions-"));
   try {
     const project: Project = { id: "one", name: "One", path, lifecycle: "active" };
-    const missing = Object.assign(new Error("missing"), { code: "ENOENT" });
     const calls: { executable: string; args: string[]; cwd: unknown }[] = [];
     const actions = new ProjectActions(async (executable, args, options) => {
       calls.push({ executable, args, cwd: options.cwd });
-      if (executable === "kitty") throw missing;
-    }, { WAYLAND_DISPLAY: "wayland-0", KITTY_WINDOW_ID: "42" });
+    }, { WAYLAND_DISPLAY: "wayland-0" }, "konsole");
     await actions.terminal(project);
-    assert.deepEqual(calls, [
-      { executable: "kitty", args: ["--directory", path], cwd: path },
-      { executable: "konsole", args: ["--workdir", path], cwd: path },
-    ]);
+    assert.deepEqual(calls, [{ executable: "konsole", args: ["--workdir", path], cwd: path }]);
   } finally { await rm(path, { recursive: true }); }
 });
 
-test("TERM=xterm-kitty alone retains the non-Kitty fallback order", async () => {
+test("Kitty environment variables do not override system terminal selection", async () => {
   const path = await mkdtemp(join(tmpdir(), "wolf-den-actions-"));
   try {
     const project: Project = { id: "one", name: "One", path, lifecycle: "active" };
     const tried: string[] = [];
-    const missing = Object.assign(new Error("missing"), { code: "ENOENT" });
-    const actions = new ProjectActions(async executable => {
-      tried.push(executable);
-      if (executable !== "gnome-terminal") throw missing;
-    }, { DISPLAY: ":0", TERM: "xterm-kitty" });
+    const actions = new ProjectActions(async executable => { tried.push(executable); },
+      { DISPLAY: ":0", TERM: "xterm-kitty", KITTY_WINDOW_ID: "42" });
     await actions.terminal(project);
-    assert.deepEqual(tried, ["konsole", "gnome-terminal"]);
+    assert.deepEqual(tried, ["xdg-terminal-exec"]);
   } finally { await rm(path, { recursive: true }); }
 });
 
-test("missing terminal candidates fall back; launch failures stop with an error", async () => {
+test("missing system opener falls back; other launch failures stop with an error", async () => {
   const path = await mkdtemp(join(tmpdir(), "wolf-den-actions-"));
   try {
     const project: Project = { id: "one", name: "One", path, lifecycle: "active" };
@@ -87,9 +79,12 @@ test("missing terminal candidates fall back; launch failures stop with an error"
       if (executable !== "kitty") throw missing;
     }, { DISPLAY: ":0" });
     await actions.terminal(project);
-    assert.deepEqual(tried, ["konsole", "gnome-terminal", "xfce4-terminal", "kitty"]);
+    assert.deepEqual(tried, ["xdg-terminal-exec", "konsole", "gnome-terminal", "xfce4-terminal", "kitty"]);
     await assert.rejects(new ProjectActions(async () => { throw missing; }, { DISPLAY: ":0" }).terminal(project), /No supported terminal/);
-    await assert.rejects(new ProjectActions(async () => { throw new Error("failed"); }, { DISPLAY: ":0" }).terminal(project), /konsole could not be launched/);
+    await assert.rejects(new ProjectActions(async () => { throw new Error("failed"); }, { DISPLAY: ":0" }).terminal(project), /xdg-terminal-exec.*could not be launched/);
+    const configured: string[] = [];
+    await assert.rejects(new ProjectActions(async executable => { configured.push(executable); throw missing; }, { DISPLAY: ":0" }, "kitty").terminal(project), /kitty \(configured terminal\) is not installed or not on PATH/);
+    assert.deepEqual(configured, ["kitty"]);
     await assert.rejects(new ProjectActions(async () => { throw missing; }).editor(project), /VS Code.*not installed/);
     await assert.rejects(new ProjectActions(async () => { throw missing; }).repository({ ...project, repository: "owner/repo" }), /xdg-open.*not installed/);
   } finally { await rm(path, { recursive: true }); }

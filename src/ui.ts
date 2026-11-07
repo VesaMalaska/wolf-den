@@ -2,7 +2,7 @@ import { BoxRenderable, TextRenderable, StyledText, bg, bold, fg, createCliRende
 import { ProjectActions } from "./actions.js";
 import type { ProjectState } from "./domain.js";
 import { GithubRefresh, loadProjectStates } from "./projects.js";
-import { loadRegistry, RegistryError } from "./registry.js";
+import { loadConfiguration, RegistryError } from "./registry.js";
 
 function safeText(value: string): string { return value.replace(/[\x00-\x1f\x7f-\x9f]/g, " "); }
 
@@ -282,7 +282,7 @@ export async function runDashboard(): Promise<void> {
   let actionPending = false;
   let detailOffset = 0;
   const refresh = new GithubRefresh();
-  const actions = new ProjectActions();
+  let actions: ProjectActions | undefined;
   const layout = new BoxRenderable(renderer, { flexDirection: "column", gap: 0, width: "100%", height: "100%" });
   const title = new TextRenderable(renderer, { content: "Wolf Den", fg: "#9fd4ff" });
   const panels = new BoxRenderable(renderer, { flexDirection: "row", gap: 0, width: "100%" });
@@ -366,7 +366,7 @@ export async function runDashboard(): Promise<void> {
       return;
     }
     if (isProjectActionKey(key.name)) {
-      if (!state || initialLoadPending) { feedback = { kind: "unavailable", text: "No project is ready for actions." }; render(); return; }
+      if (!state || initialLoadPending || !actions) { feedback = { kind: "unavailable", text: "No project is ready for actions." }; render(); return; }
       if (actionPending) { feedback = { kind: "loading", text: "An action is already launching." }; render(); return; }
       actionPending = true;
       feedback = { kind: "loading", text: `Launching action for ${safeText(state.project.name)}…`, projectId: state.project.id }; render();
@@ -406,8 +406,10 @@ export async function runDashboard(): Promise<void> {
   render();
 
   try {
-    const projects = await loadRegistry();
+    const configuration = await loadConfiguration();
     if (destroyed) return;
+    actions = new ProjectActions(undefined, undefined, configuration.settings.terminal);
+    const projects = configuration.projects;
     registryLoaded = true;
     states = projects.map(project => ({ project, git: { kind: "loading" }, github: project.repository ? { kind: "loading" } : { kind: "unavailable", reason: "No GitHub repository configured." } }));
     feedback = { kind: "loading", text: projectLoadNotice("loading", projects.length) };

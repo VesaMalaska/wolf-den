@@ -2,7 +2,7 @@ import { spawn, type SpawnOptions } from "node:child_process";
 import { constants } from "node:fs";
 import { access, stat } from "node:fs/promises";
 import { isAbsolute } from "node:path";
-import type { GithubPullRequest, Project } from "./domain.js";
+import type { GithubPullRequest, Project, TerminalPreference } from "./domain.js";
 
 export type Launch = (executable: string, args: string[], options: SpawnOptions) => Promise<void>;
 
@@ -12,13 +12,11 @@ const launch: Launch = (executable, args, options) => new Promise((resolve, reje
   child.once("spawn", () => { child.unref(); resolve(); });
 });
 
-const kittyTerminal = { executable: "kitty", args: (path: string) => ["--directory", path] } as const;
-
 const terminals = [
   { executable: "konsole", args: (path: string) => ["--workdir", path] },
   { executable: "gnome-terminal", args: (path: string) => ["--working-directory", path] },
   { executable: "xfce4-terminal", args: (path: string) => ["--working-directory", path] },
-  kittyTerminal,
+  { executable: "kitty", args: (path: string) => ["--directory", path] },
   { executable: "alacritty", args: (path: string) => ["--working-directory", path] },
   { executable: "xterm", args: (_path: string) => [] },
 ] as const;
@@ -57,7 +55,8 @@ function pullRequestUrl(project: Project, pr: GithubPullRequest): string {
 }
 
 export class ProjectActions {
-  constructor(private readonly run: Launch = launch, private readonly env: NodeJS.ProcessEnv = process.env) {}
+  constructor(private readonly run: Launch = launch, private readonly env: NodeJS.ProcessEnv = process.env,
+    private readonly terminalPreference: TerminalPreference = "system") {}
 
   async editor(project: Project): Promise<void> {
     const path = await directory(project);
@@ -68,10 +67,15 @@ export class ProjectActions {
   async terminal(project: Project): Promise<void> {
     const path = await directory(project);
     if (!this.env.DISPLAY && !this.env.WAYLAND_DISPLAY) throw new Error("No graphical session is available to open a new terminal.");
-    const candidates = this.env.KITTY_WINDOW_ID
-      ? [kittyTerminal, ...terminals.filter(terminal => terminal.executable !== "kitty")]
-      : terminals;
-    for (const terminal of candidates) {
+    if (this.terminalPreference !== "system") {
+      const terminal = terminals.find(candidate => candidate.executable === this.terminalPreference);
+      if (!terminal) throw new Error("Configured terminal is unsupported. Check settings.terminal in the project registry.");
+      try { await this.run(terminal.executable, terminal.args(path), { cwd: path }); return; }
+      catch (error) { throw failed(`${terminal.executable} (configured terminal)`, error); }
+    }
+    try { await this.run("xdg-terminal-exec", [`--dir=${path}`], { cwd: path }); return; }
+    catch (error) { if (!missingExecutable(error)) throw failed("System terminal opener (xdg-terminal-exec)", error); }
+    for (const terminal of terminals) {
       try { await this.run(terminal.executable, terminal.args(path), { cwd: path }); return; }
       catch (error) { if (!missingExecutable(error)) throw failed(terminal.executable, error); }
     }

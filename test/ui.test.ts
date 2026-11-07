@@ -83,7 +83,7 @@ test("t routes to terminal and o is no longer an action key", async () => {
     const result = projectActionForKey("t", actions, state, -1);
     await result.action;
     assert.equal(result.launched, "Terminal");
-    assert.deepEqual(calls, [{ executable: "konsole", args: ["--workdir", path], cwd: path }]);
+    assert.deepEqual(calls, [{ executable: "xdg-terminal-exec", args: [`--dir=${path}`], cwd: path }]);
   } finally { await rm(path, { recursive: true }); }
 });
 

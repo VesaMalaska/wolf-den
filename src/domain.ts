@@ -22,3 +22,4 @@ export type GithubState =
   | { kind: "unavailable"; reason: string };
 
 export type ProjectState = { project: Project; git: GitState; github: GithubState };
+export type TerminalPreference = "system" | "kitty" | "konsole" | "gnome-terminal" | "xfce4-terminal" | "alacritty" | "xterm";
