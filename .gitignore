@@ -1,2 +1,8 @@
 node_modules/
 dist/
+# Local/private developer configuration
+.env
+.env.*
+!.env.example
+projects.json
+.config/

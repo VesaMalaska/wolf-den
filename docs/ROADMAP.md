@@ -1,6 +1,6 @@
 # Wolf Den Roadmap
 
-**Status:** v0.2 implementation issues #9–#12 are merged. Issue #13 release QA is in progress; real Kitty acceptance and explicit human approval remain before any v0.2 tag. See [v0.2 release QA](V0.2-RELEASE-QA.md).
+**Status:** v0.2.0 released following real Kitty acceptance. Implementation issues #9–#12 and release QA issue #13 are complete. See the [v0.2.0 release](https://github.com/VesaMalaska/wolf-den/releases/tag/v0.2.0) and [QA report](V0.2-RELEASE-QA.md).
 
 ## Product goal
 Make it easier to understand project state, identify attention items, and resume development across several independent repositories. Wolf Den is a hybrid: informative dashboard plus a handful of safe quick actions.
@@ -39,12 +39,12 @@ The next action is manual, **never inferred from a PR**. GitHub statistics are i
   "version": 1,
   "projects": [
     {
-      "id": "twinkledoo",
-      "name": "TwinkleDoo",
-      "path": "~/projects/twinkledoo",
-      "repository": "VesaMalaska/twinkledoo",
+      "id": "sample-app",
+      "name": "Sample App",
+      "path": "~/projects/sample-app",
+      "repository": "example/sample-app",
       "lifecycle": "active",
-      "nextAction": "Review Slice 4 PR"
+      "nextAction": "Review the next task"
     }
   ]
 }
@@ -83,7 +83,7 @@ Improve keyboard accessibility, small-screen behavior, clean exit/terminal resto
 
 All slices must be independently reviewable; do not start the next slice before review unless explicitly instructed.
 
-## v0.2 — Usability and interface redesign (implemented; release QA pending)
+## v0.2 — Usability and interface redesign (released in v0.2.0)
 First actual use in Kitty confirmed that VS Code (`e`) and repository browser (`g`) launch the correct targets. Local Git and GitHub data are useful, but the current vertical text layout wastes wide-screen space, repeats status/details, and offers little visual hierarchy. The immediate priority is **workflow usability, not new data integrations**.
 
 ### Design direction
@@ -95,9 +95,9 @@ First actual use in Kitty confirmed that VS Code (`e`) and repository browser (`
 - **New quick action:** `f` opens the selected project's directory in the desktop file manager via validated path and `xdg-open` (not Nautilus-specific).
 - **Interaction:** preserve existing `↑/↓`, `Tab`, `PgUp/PgDn`, `e`, `t`, `f`, `g`, `p`, `r`, `?`, and `q` conventions. Avoid unnecessary focus modes and added dependencies.
 
-The implemented navigator uses two-line entries when space allows and one-line entries in short terminals. Its visual density still needs owner review in real Kitty windows.
+The implemented navigator uses two-line entries when space allows and one-line entries in short terminals. The owner reviewed wide and compact Kitty layouts and confirmed the v0.2.0 release gate.
 
-### v0.2 implementation issues (review individually)
+### v0.2 implementation issues (completed)
 1. [#9 — Responsive two-panel layout](https://github.com/VesaMalaska/wolf-den/issues/9) — establish wide/compact presentation and layout foundations.
 2. [#10 — Multi-project navigator UX](https://github.com/VesaMalaska/wolf-den/issues/10) — visible selection, scrolling, information density and navigation.
 3. [#11 — Selected-project details and feedback](https://github.com/VesaMalaska/wolf-den/issues/11) — meaningful information hierarchy, PR views and consistent status.
