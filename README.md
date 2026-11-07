@@ -8,19 +8,20 @@ Wolf Den answers three questions:
 3. Where did I leave off, and what should I do next?
 
 ## Status
-**v0.1 release candidate.** Local Git, optional GitHub issue/PR information and safe project quick actions are available. See [manual QA](docs/ISSUE-4-QA.md) for verification limits.
+**v0.2 release candidate, pending real Kitty acceptance.** The responsive dashboard, multi-project navigator, selected-project details and safe quick actions are implemented. See the [v0.2 release QA report](docs/V0.2-RELEASE-QA.md) for verification results and the remaining desktop checks. No v0.2 release has been tagged.
 
 ## Setup
 
 Requires Linux, Git, pnpm 11, and Node.js 26.4 or later with `--experimental-ffi` support. OpenTUI requires ESM and the FFI flag; the launcher and `pnpm start` supply it. Node 26.0 cannot launch the dashboard. See [OpenTUI runtime support](https://opentui.com/docs/getting-started/runtime-support/). A UTF-8 terminal is recommended; the interface is designed for Kitty on openSUSE Tumbleweed and also uses standard terminal escape sequences. Graphical quick actions require a desktop session.
 
 ```sh
-pnpm install
+git clone https://github.com/VesaMalaska/wolf-den.git
+cd wolf-den
+pnpm install --frozen-lockfile
 pnpm build
-pnpm start
 ```
 
-Create `~/.config/wolf-den/projects.json`:
+Create the registry directory with `mkdir -p ~/.config/wolf-den`, then save the following as `~/.config/wolf-den/projects.json`. Replace the example path with an existing project directory before launching:
 
 ```json
 {
@@ -38,6 +39,8 @@ Create `~/.config/wolf-den/projects.json`:
   ]
 }
 ```
+
+Run `pnpm start` from the cloned repository, or run `./bin/wolf-den.mjs` after building.
 
 `settings` is optional. Omitting it, or setting `terminal` to `system`, uses the desktop's preferred terminal when supported. To choose a specific terminal, set `"settings": { "terminal": "kitty" }` at the top level. Supported values are `system`, `kitty`, `konsole`, `gnome-terminal`, `xfce4-terminal`, `alacritty`, and `xterm`; an explicit choice must be installed and will not fall back to another application. `repository` is optional. For GitHub data, install and authenticate the GitHub CLI (`gh auth login`), then set `repository` to `owner/name`. Paths must be absolute or start with `~/`. Missing GitHub configuration or CLI, authentication and network failures appear as unavailable; failed refreshes retain the last successful result as stale. Local Git remains visible throughout.
 
