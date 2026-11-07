@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { ProjectActions, type Launch } from "../src/actions.js";
 import type { Project } from "../src/domain.js";
 
-test("editor, terminal, repository and PR use explicit arguments for the selected target", async () => {
+test("editor, terminal, file manager, repository and PR use explicit arguments for the selected target", async () => {
   const path = await mkdtemp(join(tmpdir(), "wolf-den-actions-"));
   try {
     const project: Project = { id: "one", name: "One", path, repository: "owner/repo", lifecycle: "active" };
@@ -15,15 +15,64 @@ test("editor, terminal, repository and PR use explicit arguments for the selecte
     const actions = new ProjectActions(run, { DISPLAY: ":0" });
     await actions.editor(project);
     await actions.terminal(project);
+    await actions.fileManager(project);
     await actions.repository(project);
     await actions.pullRequest(project, { number: 7, title: "PR", url: "https://github.com/owner/repo/pull/7", draft: false, checks: null, review: null });
     assert.deepEqual(calls.map(({ executable, args }) => [executable, args]), [
       ["code", ["--new-window", path]], ["konsole", ["--workdir", path]],
+      ["xdg-open", [path]],
       ["xdg-open", ["https://github.com/owner/repo"]], ["xdg-open", ["https://github.com/owner/repo/pull/7"]],
     ]);
     assert.equal(calls[0]?.cwd, path);
     assert.equal(calls[1]?.cwd, path);
+    assert.equal(calls[2]?.cwd, path);
     assert.ok(calls.every(call => call.shell !== true));
+  } finally { await rm(path, { recursive: true }); }
+});
+
+test("Kitty session prefers Kitty with the selected project's working directory", async () => {
+  const path = await mkdtemp(join(tmpdir(), "wolf-den-actions-"));
+  try {
+    const project: Project = { id: "one", name: "One", path, lifecycle: "active" };
+    const calls: { executable: string; args: string[]; cwd: unknown }[] = [];
+    const actions = new ProjectActions(async (executable, args, options) => {
+      calls.push({ executable, args, cwd: options.cwd });
+    }, { DISPLAY: ":0", KITTY_WINDOW_ID: "42" });
+    await actions.terminal(project);
+    assert.deepEqual(calls, [{ executable: "kitty", args: ["--directory", path], cwd: path }]);
+  } finally { await rm(path, { recursive: true }); }
+});
+
+test("missing Kitty falls back to the documented terminal order", async () => {
+  const path = await mkdtemp(join(tmpdir(), "wolf-den-actions-"));
+  try {
+    const project: Project = { id: "one", name: "One", path, lifecycle: "active" };
+    const missing = Object.assign(new Error("missing"), { code: "ENOENT" });
+    const calls: { executable: string; args: string[]; cwd: unknown }[] = [];
+    const actions = new ProjectActions(async (executable, args, options) => {
+      calls.push({ executable, args, cwd: options.cwd });
+      if (executable === "kitty") throw missing;
+    }, { WAYLAND_DISPLAY: "wayland-0", KITTY_WINDOW_ID: "42" });
+    await actions.terminal(project);
+    assert.deepEqual(calls, [
+      { executable: "kitty", args: ["--directory", path], cwd: path },
+      { executable: "konsole", args: ["--workdir", path], cwd: path },
+    ]);
+  } finally { await rm(path, { recursive: true }); }
+});
+
+test("TERM=xterm-kitty alone retains the non-Kitty fallback order", async () => {
+  const path = await mkdtemp(join(tmpdir(), "wolf-den-actions-"));
+  try {
+    const project: Project = { id: "one", name: "One", path, lifecycle: "active" };
+    const tried: string[] = [];
+    const missing = Object.assign(new Error("missing"), { code: "ENOENT" });
+    const actions = new ProjectActions(async executable => {
+      tried.push(executable);
+      if (executable !== "gnome-terminal") throw missing;
+    }, { DISPLAY: ":0", TERM: "xterm-kitty" });
+    await actions.terminal(project);
+    assert.deepEqual(tried, ["konsole", "gnome-terminal"]);
   } finally { await rm(path, { recursive: true }); }
 });
 

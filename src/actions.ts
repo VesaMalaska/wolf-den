@@ -12,11 +12,13 @@ const launch: Launch = (executable, args, options) => new Promise((resolve, reje
   child.once("spawn", () => { child.unref(); resolve(); });
 });
 
+const kittyTerminal = { executable: "kitty", args: (path: string) => ["--directory", path] } as const;
+
 const terminals = [
   { executable: "konsole", args: (path: string) => ["--workdir", path] },
   { executable: "gnome-terminal", args: (path: string) => ["--working-directory", path] },
   { executable: "xfce4-terminal", args: (path: string) => ["--working-directory", path] },
-  { executable: "kitty", args: (path: string) => ["--directory", path] },
+  kittyTerminal,
   { executable: "alacritty", args: (path: string) => ["--working-directory", path] },
   { executable: "xterm", args: (_path: string) => [] },
 ] as const;
@@ -66,7 +68,10 @@ export class ProjectActions {
   async terminal(project: Project): Promise<void> {
     const path = await directory(project);
     if (!this.env.DISPLAY && !this.env.WAYLAND_DISPLAY) throw new Error("No graphical session is available to open a new terminal.");
-    for (const terminal of terminals) {
+    const candidates = this.env.KITTY_WINDOW_ID
+      ? [kittyTerminal, ...terminals.filter(terminal => terminal.executable !== "kitty")]
+      : terminals;
+    for (const terminal of candidates) {
       try { await this.run(terminal.executable, terminal.args(path), { cwd: path }); return; }
       catch (error) { if (!missingExecutable(error)) throw failed(terminal.executable, error); }
     }

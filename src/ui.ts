@@ -220,7 +220,7 @@ export function detailLines(state: ProjectState | undefined, selectedPr: number,
       add(`      Review ${safeText(pr.review ?? "unavailable")}  ·  Checks ${safeText(pr.checks ?? "unavailable")}`, "muted");
     });
   }
-  if (width >= 38) { section("QUICK ACTIONS"); add("    f files  ·  e editor  ·  o terminal  ·  g repo  ·  p PR", "muted"); }
+  if (width >= 38) { section("QUICK ACTIONS"); add("    f files  ·  e editor  ·  t terminal  ·  g repo  ·  p PR", "muted"); }
   return { lines: rows.map(row => row.text), rows, selectedLine };
 }
 
@@ -247,6 +247,26 @@ export function projectLoadNotice(phase: "registry" | "loading" | "ready", count
   if (phase === "registry") return "Loading project registry…";
   if (count === 0) return "No projects configured.";
   return `${phase === "loading" ? "Loading" : "Ready:"} ${count} project${count === 1 ? "" : "s"}${phase === "loading" ? "…" : "."}`;
+}
+
+type ProjectActionKey = "e" | "t" | "f" | "g" | "p";
+
+export function isProjectActionKey(key: string): key is ProjectActionKey {
+  return key === "e" || key === "t" || key === "f" || key === "g" || key === "p";
+}
+
+export function projectActionForKey(key: ProjectActionKey, actions: ProjectActions, state: ProjectState, selectedPr: number): { action: Promise<void>; launched: string } {
+  const project = state.project;
+  switch (key) {
+    case "e": return { action: actions.editor(project), launched: "VS Code" };
+    case "t": return { action: actions.terminal(project), launched: "Terminal" };
+    case "f": return { action: actions.fileManager(project), launched: "File manager opener" };
+    case "g": return { action: actions.repository(project), launched: "Repository opener" };
+    case "p": {
+      const pr = state.github.kind === "available" ? state.github.pullRequests[selectedPr] : undefined;
+      return { action: pr ? actions.pullRequest(project, pr) : Promise.reject(new Error("Select an available PR with Tab first.")), launched: `PR #${pr?.number} opener` };
+    }
+  }
 }
 
 export async function runDashboard(): Promise<void> {
@@ -300,7 +320,7 @@ export async function runDashboard(): Promise<void> {
       navigatorHeadingRows - 1);
     divider.content = dimensions.wide ? Array(dimensions.dividerHeight).fill("│").join("\n") : "─".repeat(dimensions.dividerWidth);
     const view = showingHelp
-      ? { lines: ["Keyboard shortcuts", "↑/↓  Select project", "Tab  Select next PR", "e  Open project in VS Code", "o  Open terminal in project", "f  Open project in file manager", "g  Open GitHub repository", "p  Open selected PR", "r  Refresh selected project's GitHub data", "PgUp/PgDn  Scroll details", "?  Close help", "q / Esc / Ctrl+C  Quit"], selectedLine: 0 }
+      ? { lines: ["Keyboard shortcuts", "↑/↓  Select project", "Tab  Select next PR", "e  Open project in VS Code", "t  Open terminal in project", "f  Open project in file manager", "g  Open GitHub repository", "p  Open selected PR", "r  Refresh selected project's GitHub data", "PgUp/PgDn  Scroll details", "?  Close help", "q / Esc / Ctrl+C  Quit"], selectedLine: 0 }
       : registryLoaded ? detailLines(states[selected], selectedPr, dimensions.detailWidth, renderer.widthMethod) : { lines: [feedback.text], selectedLine: 0 };
     detailOffset = Math.min(detailOffset, Math.max(0, view.lines.length - dimensions.detailHeight));
     const tones: Record<DetailTone, string> = { heading: "#849bab", title: "#f0f7fc", muted: "#91a8b8", normal: "#d6e4ee", good: "#9bd6ac", warn: "#e7bd83", error: "#ed9a9a", selected: "#f7fbff" };
@@ -319,7 +339,7 @@ export async function runDashboard(): Promise<void> {
     message.content = fitLine(`${labels[shown.kind]} ${shown.text}`, dimensions.columns, renderer.widthMethod);
     const shortcuts = dimensions.columns < 18 ? "? q" : dimensions.columns < 45
       ? "? help · q quit · ↑/↓ project · Tab PR"
-      : "? help · q quit · ↑/↓ project · f files · e editor · o terminal · Tab PR · PgUp/PgDn scroll · g repo · p PR · r refresh";
+      : "? help · q quit · ↑/↓ project · f files · e editor · t terminal · Tab PR · PgUp/PgDn scroll · g repo · p PR · r refresh";
     footer.content = fitLine(shortcuts, dimensions.columns, renderer.widthMethod);
   };
   const onKey = (key: KeyEvent) => {
@@ -345,18 +365,12 @@ export async function runDashboard(): Promise<void> {
       void refresh.refresh(state, github => { if (!destroyed) { state.github = github; if (github.kind !== "loading" && states[selected]?.project.id === state.project.id) feedback = { kind: github.kind === "available" ? "success" : "unavailable", text: github.kind === "available" ? `GitHub refreshed for ${safeText(state.project.name)}.` : `GitHub ${github.kind} for ${safeText(state.project.name)}: ${safeText(github.reason)}`, projectId: state.project.id }; render(); } });
       return;
     }
-    if (["e", "o", "f", "g", "p"].includes(key.name)) {
+    if (isProjectActionKey(key.name)) {
       if (!state || initialLoadPending) { feedback = { kind: "unavailable", text: "No project is ready for actions." }; render(); return; }
       if (actionPending) { feedback = { kind: "loading", text: "An action is already launching." }; render(); return; }
       actionPending = true;
       feedback = { kind: "loading", text: `Launching action for ${safeText(state.project.name)}…`, projectId: state.project.id }; render();
-      const pr = state.github.kind === "available" ? state.github.pullRequests[selectedPr] : undefined;
-      const action = key.name === "e" ? actions.editor(state.project)
-        : key.name === "o" ? actions.terminal(state.project)
-        : key.name === "f" ? actions.fileManager(state.project)
-        : key.name === "g" ? actions.repository(state.project)
-        : pr ? actions.pullRequest(state.project, pr) : Promise.reject(new Error("Select an available PR with Tab first."));
-      const launched = key.name === "e" ? "VS Code" : key.name === "o" ? "Terminal" : key.name === "f" ? "File manager opener" : key.name === "g" ? "Repository opener" : `PR #${pr?.number} opener`;
+      const { action, launched } = projectActionForKey(key.name, actions, state, selectedPr);
       void action.then(() => { if (!destroyed && states[selected]?.project.id === state.project.id) { feedback = { kind: "success", text: `${launched} launched for ${safeText(state.project.name)}.`, projectId: state.project.id }; render(); } })
         .catch((error: unknown) => { if (!destroyed && states[selected]?.project.id === state.project.id) { feedback = { kind: "error", text: `${launched} for ${safeText(state.project.name)} failed: ${error instanceof Error ? safeText(error.message) : "Action failed."}`, projectId: state.project.id }; render(); } })
         .finally(() => { actionPending = false; });
