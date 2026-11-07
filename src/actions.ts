@@ -1,5 +1,6 @@
 import { spawn, type SpawnOptions } from "node:child_process";
-import { stat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { access, stat } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import type { GithubPullRequest, Project } from "./domain.js";
 
@@ -33,6 +34,7 @@ async function directory(project: Project): Promise<string> {
   if (!isAbsolute(project.path) || project.path.includes("\0")) throw new Error("Configured project path must be an absolute directory.");
   try {
     if (!(await stat(project.path)).isDirectory()) throw new Error("not a directory");
+    await access(project.path, constants.R_OK | constants.X_OK);
   } catch {
     throw new Error("Selected project directory is unavailable. Check its configured path.");
   }
@@ -75,6 +77,12 @@ export class ProjectActions {
     const url = repositoryUrl(project);
     try { await this.run("xdg-open", [url], { cwd: process.cwd() }); }
     catch (error) { throw failed("Browser opener (xdg-open)", error); }
+  }
+
+  async fileManager(project: Project): Promise<void> {
+    const path = await directory(project);
+    try { await this.run("xdg-open", [path], { cwd: path }); }
+    catch (error) { throw failed("File manager opener (xdg-open)", error); }
   }
 
   async pullRequest(project: Project, pr: GithubPullRequest): Promise<void> {
