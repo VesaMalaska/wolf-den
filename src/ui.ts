@@ -1,4 +1,4 @@
-import { BoxRenderable, TextRenderable, createCliRenderer, measureEditText, type KeyEvent, type WidthMethod } from "@opentui/core";
+import { BoxRenderable, TextRenderable, StyledText, bg, fg, createCliRenderer, measureEditText, type KeyEvent, type WidthMethod } from "@opentui/core";
 import { ProjectActions } from "./actions.js";
 import type { ProjectState } from "./domain.js";
 import { GithubRefresh, loadProjectStates } from "./projects.js";
@@ -35,7 +35,42 @@ export function fitLine(value: string, width: number, widthMethod: WidthMethod =
 }
 
 export function visibleWindow(total: number, selected: number, height: number): number {
-  return Math.max(0, Math.min(selected - Math.floor(Math.max(1, height) / 2), total - Math.max(1, height)));
+  if (total <= 0 || height <= 0) return 0;
+  const index = clampSelection(selected, total);
+  return Math.max(0, Math.min(index - Math.floor(height / 2), total - height));
+}
+
+export function clampSelection(selected: number, count: number): number {
+  return count <= 0 ? 0 : Math.max(0, Math.min(count - 1, selected));
+}
+
+export function navigatorRow(state: ProjectState, width: number, selected: boolean, widthMethod: WidthMethod = "unicode") {
+  const measure = (value: string) => measureEditText(value, { widthMethod });
+  const git = state.git;
+  const status = git.kind === "available" ? (git.clean ? "clean" : "dirty")
+    : git.kind === "loading" ? "git…" : git.kind === "stale" ? "git stale" : "git n/a";
+  const branch = git.kind === "available" ? git.branch : git.kind === "stale" ? git.previous.branch : "";
+  const remote = state.project.repository && state.github.kind !== "available"
+    ? state.github.kind === "loading" ? " GH…" : state.github.kind === "stale" ? " GH~" : " GH!" : "";
+  const marker = selected ? "▌ " : "  ";
+  const available = Math.max(0, width - measure(marker));
+  let suffix = `  ${status}${remote}`;
+  const branchWidth = Math.min(12, available - 10 - measure(`   · ${status}${remote}`));
+  if (branch && branchWidth >= 4) suffix = `  ${fitLine(branch, branchWidth, widthMethod)} · ${status}${remote}`;
+  if (measure(suffix) > available - 8) suffix = `  ${status}`;
+  if (measure(suffix) > available - 4) suffix = "";
+  const name = fitLine(state.project.name, available - measure(suffix), widthMethod);
+  const text = fitLine(marker + name + suffix, width, widthMethod);
+  const padding = selected ? " ".repeat(Math.max(0, width - measure(text))) : "";
+  return { text: text + padding, status, selected };
+}
+
+export function navigatorView(states: ProjectState[], selected: number, height: number, width: number, widthMethod: WidthMethod = "unicode") {
+  const index = clampSelection(selected, states.length);
+  const start = visibleWindow(states.length, index, height);
+  const rows = states.slice(start, start + Math.max(0, height)).map((state, offset) =>
+    navigatorRow(state, width, start + offset === index, widthMethod));
+  return { index, start, rows };
 }
 
 const WIDE_MIN_WIDTH = 88;
@@ -91,8 +126,12 @@ export function detailLines(state: ProjectState | undefined, selectedPr: number)
 }
 
 export function moveSelection(selected: number, count: number, direction: "up" | "down"): number {
-  if (count === 0) return 0;
-  return Math.max(0, Math.min(count - 1, selected + (direction === "up" ? -1 : 1)));
+  return clampSelection(clampSelection(selected, count) + (direction === "up" ? -1 : 1), count);
+}
+
+export function moveProjectSelection(selected: number, selectedPr: number, count: number, direction: "up" | "down") {
+  const next = moveSelection(selected, count, direction);
+  return { selected: next, selectedPr: next === selected ? selectedPr : -1 };
 }
 
 export function projectLoadNotice(phase: "registry" | "loading" | "ready", count = 0): string {
@@ -145,10 +184,17 @@ export async function runDashboard(): Promise<void> {
     title.content = fitLine("🐺 Wolf Den", dimensions.columns, renderer.widthMethod);
     const navigatorHeading = dimensions.wide && dimensions.navigatorHeight > 1 ? 1 : 0;
     const navigatorRows = dimensions.navigatorHeight - navigatorHeading;
-    const listStart = visibleWindow(states.length, selected, navigatorRows);
-    const projectRows = states.length ? states.slice(listStart, listStart + navigatorRows).map((state, offset) =>
-      fitLine(`${listStart + offset === selected ? ">" : " "} ${state.project.name}`, dimensions.navigatorWidth, renderer.widthMethod)) : [fitLine("No projects configured", dimensions.navigatorWidth, renderer.widthMethod)];
-    list.content = [...(navigatorHeading ? ["Projects"] : []), ...projectRows].join("\n");
+    const navigator = navigatorView(states, selected, navigatorRows, dimensions.navigatorWidth, renderer.widthMethod);
+    selected = navigator.index;
+    const chunks = [];
+    if (navigatorHeading) chunks.push(fg("#849bab")(fitLine(`Projects ${states.length ? `${selected + 1}/${states.length}` : ""}`, dimensions.navigatorWidth, renderer.widthMethod) + "\n"));
+    if (states.length === 0) chunks.push(fg("#849bab")(fitLine("No projects configured", dimensions.navigatorWidth, renderer.widthMethod)));
+    navigator.rows.forEach((row, index) => {
+      if (index > 0) chunks.push(fg("#849bab")("\n"));
+      const color = row.status === "dirty" ? "#e4ba78" : row.status === "clean" ? "#c6d5df" : "#92a7b6";
+      chunks.push(row.selected ? bg("#29465c")(fg("#f7fbff")(row.text)) : fg(color)(row.text));
+    });
+    list.content = new StyledText(chunks);
     divider.content = dimensions.wide ? Array(dimensions.dividerHeight).fill("│").join("\n") : "─".repeat(dimensions.dividerWidth);
     const view = showingHelp
       ? { lines: ["Keyboard shortcuts", "↑/↓  Select project", "Tab  Select next PR", "e  Open project in VS Code", "o  Open terminal in project", "g  Open GitHub repository", "p  Open selected PR", "r  Refresh selected project's GitHub data", "PgUp/PgDn  Scroll details", "?  Close help", "q / Esc / Ctrl+C  Quit"], selectedLine: 0 }
@@ -200,7 +246,12 @@ export async function runDashboard(): Promise<void> {
         .finally(() => { actionPending = false; });
       return;
     }
-    if (key.name === "up" || key.name === "down") { selected = moveSelection(selected, states.length, key.name); selectedPr = -1; detailOffset = 0; notice = states[selected] ? `Selected ${safeText(states[selected]!.project.name)}.` : projectLoadNotice("ready"); }
+    if (key.name === "up" || key.name === "down") {
+      const next = moveProjectSelection(selected, selectedPr, states.length, key.name);
+      if (next.selected !== selected) detailOffset = 0;
+      selected = next.selected; selectedPr = next.selectedPr;
+      notice = states[selected] ? `Selected ${safeText(states[selected]!.project.name)}.` : projectLoadNotice("ready");
+    }
     else return;
     render();
   };
