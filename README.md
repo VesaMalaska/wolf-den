@@ -8,7 +8,13 @@ Wolf Den answers three questions:
 3. Where did I leave off, and what should I do next?
 
 ## Status
-**v0.2 release candidate, pending real Kitty acceptance.** The responsive dashboard, multi-project navigator, selected-project details and safe quick actions are implemented. See the [v0.2 release QA report](docs/V0.2-RELEASE-QA.md) for verification results and the remaining desktop checks. No v0.2 release has been tagged.
+**v0.2.0 released.** The responsive dashboard, multi-project navigator, selected-project details and safe quick actions have passed human acceptance in Kitty on openSUSE Tumbleweed. See the [v0.2.0 GitHub release](https://github.com/VesaMalaska/wolf-den/releases/tag/v0.2.0) and [QA report](docs/V0.2-RELEASE-QA.md).
+
+## Open source and portfolio
+
+Wolf Den is a local-first, read-only terminal dashboard built with TypeScript, Node.js and OpenTUI. It combines local Git status, optional GitHub activity and keyboard-driven project shortcuts. See [LICENSE](LICENSE) for the MIT license.
+
+Your own project registry lives at `~/.config/wolf-den/projects.json`, outside the cloned repository. Never commit personal registries, authentication data or screenshots containing private project information. Wolf Den uses `gh` for authenticated GitHub access; no API tokens should be placed in the configuration file.
 
 ## Setup
 
