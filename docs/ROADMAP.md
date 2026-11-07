@@ -59,7 +59,7 @@ Initial suggested shortcuts:
 - `Enter`: inspect selected project
 - `r`: refresh selected project
 - `e`: open in VS Code
-- `o`: open new terminal in directory (never attempt to mutate parent shell cwd)
+- `t`: open new terminal in directory (never attempt to mutate parent shell cwd)
 - `g`: open repository browser page
 - `p`: open selected PR when a PR is selected/available
 - `?`: help; `q`: quit
@@ -93,7 +93,7 @@ First actual use in Kitty confirmed that VS Code (`e`) and repository browser (`
 - **Details:** clear sections for local Git, GitHub/PRs, manual next action and relevant quick actions. Keep PR selection and scrolling usable.
 - **Status and shortcuts:** a stable feedback region/footer that does not push content around or display contradictory messages.
 - **New quick action:** `f` opens the selected project's directory in the desktop file manager via validated path and `xdg-open` (not Nautilus-specific).
-- **Interaction:** preserve existing `↑/↓`, `Tab`, `PgUp/PgDn`, `e`, `o`, `g`, `p`, `r`, `?`, and `q` conventions. Avoid unnecessary focus modes and added dependencies.
+- **Interaction:** preserve existing `↑/↓`, `Tab`, `PgUp/PgDn`, `e`, `t`, `f`, `g`, `p`, `r`, `?`, and `q` conventions. Avoid unnecessary focus modes and added dependencies.
 
 **Open UX decision:** whether navigator rows should be maximally compact or show more per-project context. Validate with multiple actual projects and narrow Kitty windows; do not lock this down prematurely.
 

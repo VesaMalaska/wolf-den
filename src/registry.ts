@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { z } from "zod";
-import type { Project } from "./domain.js";
+import type { Project, TerminalPreference } from "./domain.js";
 
 const projectSchema = z.strictObject({
   id: z.string().trim().min(1).regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/),
@@ -12,7 +12,15 @@ const projectSchema = z.strictObject({
   lifecycle: z.string().trim().min(1),
   nextAction: z.string().trim().min(1).optional(),
 });
-const registrySchema = z.strictObject({ version: z.literal(1), projects: z.array(projectSchema) });
+const registrySchema = z.strictObject({
+  version: z.literal(1),
+  settings: z.strictObject({
+    terminal: z.enum(["system", "kitty", "konsole", "gnome-terminal", "xfce4-terminal", "alacritty", "xterm"]).default("system"),
+  }).default({ terminal: "system" }),
+  projects: z.array(projectSchema),
+});
+
+export type RegistryConfiguration = { projects: Project[]; settings: { terminal: TerminalPreference } };
 
 export class RegistryError extends Error {}
 
@@ -22,7 +30,7 @@ export function expandProjectPath(input: string, home = homedir()): string {
   return resolve(expanded);
 }
 
-export function parseRegistry(json: string, home = homedir()): Project[] {
+export function parseConfiguration(json: string, home = homedir()): RegistryConfiguration {
   let raw: unknown;
   try { raw = JSON.parse(json); }
   catch { throw new RegistryError("Malformed JSON in project registry."); }
@@ -32,24 +40,33 @@ export function parseRegistry(json: string, home = homedir()): Project[] {
     throw new RegistryError(`Invalid project registry: ${issues.join("; ")}`);
   }
   const ids = new Set<string>();
-  return result.data.projects.map((entry, index) => {
+  const projects = result.data.projects.map((entry, index) => {
     if (ids.has(entry.id)) throw new RegistryError(`projects.${index}.id: duplicate ID '${entry.id}'.`);
     ids.add(entry.id);
     try { return { ...entry, path: expandProjectPath(entry.path, home) }; }
     catch (error) { throw new RegistryError(`projects.${index}.path: ${(error as Error).message}`); }
   });
+  return { projects, settings: result.data.settings };
+}
+
+export function parseRegistry(json: string, home = homedir()): Project[] {
+  return parseConfiguration(json, home).projects;
 }
 
 export function defaultRegistryPath(home = homedir()): string {
   return join(home, ".config", "wolf-den", "projects.json");
 }
 
-export async function loadRegistry(path = defaultRegistryPath()): Promise<Project[]> {
+export async function loadConfiguration(path = defaultRegistryPath()): Promise<RegistryConfiguration> {
   let json: string;
   try { json = await readFile(path, "utf8"); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new RegistryError("Project registry is missing. Create ~/.config/wolf-den/projects.json (see README).");
     throw new RegistryError("Could not read project registry. Check file permissions.");
   }
-  return parseRegistry(json);
+  return parseConfiguration(json);
+}
+
+export async function loadRegistry(path = defaultRegistryPath()): Promise<Project[]> {
+  return (await loadConfiguration(path)).projects;
 }

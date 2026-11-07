@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { measureEditText } from "@opentui/core";
-import { clampSelection, dashboardLayout, detailLines, feedbackForSelection, fitLine, moveProjectSelection, moveSelection, navigatorContent, navigatorEntry, navigatorHeadingHeight, navigatorHeadingText, navigatorRow, navigatorView, projectLoadNotice, scrollToLine, visibleWindow } from "../src/ui.js";
+import { ProjectActions } from "../src/actions.js";
+import { clampSelection, dashboardLayout, detailLines, feedbackForSelection, fitLine, isProjectActionKey, moveProjectSelection, moveSelection, navigatorContent, navigatorEntry, navigatorHeadingHeight, navigatorHeadingText, navigatorRow, navigatorView, projectActionForKey, projectLoadNotice, scrollToLine, visibleWindow } from "../src/ui.js";
 import type { ProjectState } from "../src/domain.js";
 
 test("wide layout keeps separate panels and fixed feedback rows", () => {
@@ -57,6 +61,30 @@ test("selected PR stays in details while loading and stale remote state remains 
 test("navigation stays at zero before projects load and with an empty registry", () => {
   assert.equal(moveSelection(0, 0, "down"), 0);
   assert.equal(moveSelection(0, 0, "up"), 0);
+});
+
+test("t routes to terminal and o is no longer an action key", async () => {
+  const path = await mkdtemp(join(tmpdir(), "wolf-den-ui-actions-"));
+  try {
+    const calls: { executable: string; args: string[]; cwd: unknown }[] = [];
+    const actions = new ProjectActions(async (executable, args, options) => {
+      calls.push({ executable, args, cwd: options.cwd });
+    }, { DISPLAY: ":0" });
+    const state: ProjectState = {
+      project: { id: "selected", name: "Selected", path, lifecycle: "active" },
+      git: { kind: "loading" },
+      github: { kind: "unavailable", reason: "Not configured" },
+    };
+    assert.equal(isProjectActionKey("t"), true);
+    assert.equal(isProjectActionKey("o"), false);
+    const hints = detailLines(state, -1, 80).lines.join("\n");
+    assert.match(hints, /t terminal/);
+    assert.doesNotMatch(hints, /o terminal/);
+    const result = projectActionForKey("t", actions, state, -1);
+    await result.action;
+    assert.equal(result.launched, "Terminal");
+    assert.deepEqual(calls, [{ executable: "xdg-terminal-exec", args: [`--dir=${path}`], cwd: path }]);
+  } finally { await rm(path, { recursive: true }); }
 });
 
 test("navigation clamps to the available project range", () => {
