@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { clampSelection, dashboardLayout, detailLines, fitLine, moveProjectSelection, moveSelection, navigatorRow, navigatorView, projectLoadNotice, visibleWindow } from "../src/ui.js";
+import { measureEditText } from "@opentui/core";
+import { clampSelection, dashboardLayout, detailLines, fitLine, moveProjectSelection, moveSelection, navigatorContent, navigatorEntry, navigatorHeadingHeight, navigatorHeadingText, navigatorRow, navigatorView, projectLoadNotice, visibleWindow } from "../src/ui.js";
 import type { ProjectState } from "../src/domain.js";
 
 test("wide layout keeps separate panels and fixed feedback rows", () => {
@@ -31,7 +32,7 @@ test("compact layout allocates selection, details and footer without overflow", 
 
 test("empty and single-project layouts retain a navigator row", () => {
   assert.equal(dashboardLayout(40, 15, 0).navigatorHeight, 1);
-  assert.equal(dashboardLayout(40, 15, 1).navigatorHeight, 1);
+  assert.equal(dashboardLayout(40, 15, 1).navigatorHeight, 2);
 });
 
 test("selected PR stays in details while loading and stale remote state remains explicit", () => {
@@ -100,12 +101,13 @@ test("twelve project viewport retains selected row across navigation and resizin
   const states = Array.from({ length: 12 }, (_, index) => projectState(index));
   for (const [width, height] of [[120, 24], [40, 15], [30, 9], [88, 8]]) {
     const layout = dashboardLayout(width!, height!, states.length);
-    const rows = layout.navigatorHeight - (layout.wide && layout.navigatorHeight > 1 ? 1 : 0);
+    const rows = layout.navigatorHeight - navigatorHeadingHeight(layout.wide, layout.navigatorHeight);
     for (let selected = 0; selected < states.length; selected++) {
       const view = navigatorView(states, selected, rows, layout.navigatorWidth, "unicode-wide");
-      assert.ok(view.start <= selected && selected < view.start + rows);
-      assert.equal(view.rows.filter(row => row.selected).length, 1);
-      assert.ok(view.rows.every(row => row.text.length <= layout.navigatorWidth));
+      assert.ok(view.start <= selected && selected < view.start + view.capacity);
+      assert.equal(view.entries.filter(entry => entry.selected).length, 1);
+      assert.ok(view.entries.every(entry => "nameLine" in entry && measureEditText(entry.nameLine, { widthMethod: "unicode-wide" }) === layout.navigatorWidth));
+      assert.ok(view.entries.length * (view.twoLine ? 2 : 1) + Math.max(0, view.entries.length - 1) * view.gap <= rows);
       assert.match(detailLines(states[view.index], -1).lines[0]!, new RegExp(states[selected]!.project.name));
     }
   }
@@ -114,6 +116,63 @@ test("twelve project viewport retains selected row across navigation and resizin
   assert.equal(navigatorView(states.slice(0, 5), 99, 3, 40).index, 4);
   assert.equal(visibleWindow(12, 99, 3), 9);
   assert.equal(visibleWindow(12, 11, 0), 0);
+});
+
+test("two-line entry gives name its own line and right-aligns status without collisions", () => {
+  const state = projectState(11);
+  state.git = { kind: "available", branch: "long/界界/feature/navigation", detached: false, staged: false, unstaged: false, untracked: true, clean: false };
+  for (const width of [26, 42, 80]) {
+    const entry = navigatorEntry(state, width, true, "unicode-wide");
+    assert.ok(entry.nameLine.startsWith("▌ "));
+    assert.ok(entry.metadataLine.startsWith("  ⎇ "));
+    assert.ok(entry.nameLine.includes("Pitkä"));
+    assert.ok(!entry.nameLine.includes("dirty"));
+    assert.ok(entry.metadataLine.trimEnd().endsWith("dirty"));
+    assert.equal(measureEditText(entry.nameLine, { widthMethod: "unicode-wide" }), width);
+    assert.equal(measureEditText(entry.metadataLine, { widthMethod: "unicode-wide" }), width);
+    assert.equal(entry.statusStart, width - 7);
+    assert.ok(measureEditText(entry.metadataMarker + entry.branchText + entry.remoteText, { widthMethod: "unicode-wide" }) <= entry.statusStart - 2);
+  }
+  const narrow = navigatorEntry(state, 12, true, "unicode-wide");
+  assert.ok(narrow.nameLine.includes("…"));
+  assert.ok(narrow.metadataLine.trimEnd().endsWith("dirty"));
+});
+
+test("navigator heading keeps project count at the right edge", () => {
+  const heading = navigatorHeadingText(4, 42, "unicode-wide");
+  assert.ok(heading.startsWith("PROJECTS"));
+  assert.ok(heading.endsWith("4 projects"));
+  assert.equal(measureEditText(heading, { widthMethod: "unicode-wide" }), 42);
+  assert.equal(navigatorHeadingText(1, 42).trimEnd().endsWith("1 project"), true);
+  assert.equal(navigatorHeadingText(20, 8), "PROJECTS");
+  assert.equal(navigatorHeadingHeight(true, 17), 2);
+  assert.equal(navigatorHeadingHeight(true, 5), 1);
+  assert.equal(navigatorHeadingHeight(false, 17), 0);
+});
+
+test("viewport keeps complete two-line entries and uses single-line fallback for short windows", () => {
+  const states = Array.from({ length: 20 }, (_, index) => projectState(index));
+  const wide = navigatorView(states, 19, 17, 42, "unicode-wide");
+  assert.equal(wide.gap, 1);
+  assert.ok(wide.start <= 19 && 19 < wide.start + wide.capacity);
+  assert.ok(wide.entries.every(entry => "nameLine" in entry));
+  const compact = navigatorView(states, 19, 4, 40, "unicode-wide");
+  assert.equal(compact.capacity, 2);
+  assert.equal(compact.entries.length, 2);
+  assert.ok(compact.entries.every(entry => "metadataLine" in entry));
+  const short = navigatorView(states, 19, 1, 40, "unicode-wide");
+  assert.equal(short.twoLine, false);
+  assert.equal(short.entries.length, 1);
+  assert.equal(short.start, 19);
+});
+
+test("selected project highlight covers both lines and stops before the next entry", () => {
+  const view = navigatorView([projectState(0), projectState(1)], 0, 6, 32, "unicode-wide");
+  const content = navigatorContent(view, 32, "unicode-wide");
+  const selected = content.chunks.filter(chunk => chunk.bg?.toInts().slice(0, 3).join() === "41,70,92");
+  assert.equal(selected.map(chunk => chunk.text).join(""), (view.entries[0] as ReturnType<typeof navigatorEntry>).nameLine + "\n" + (view.entries[0] as ReturnType<typeof navigatorEntry>).metadataLine);
+  assert.ok(content.chunks.some(chunk => chunk.text.includes("Project 1") && !chunk.bg));
+  assert.ok(content.chunks.some(chunk => chunk.text.includes("Project 0") && ((chunk.attributes ?? 0) & 1) !== 0));
 });
 
 test("long Unicode names clip safely in narrow navigator rows", () => {
