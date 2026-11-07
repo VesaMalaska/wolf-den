@@ -68,6 +68,7 @@ export function navigatorRow(state: ProjectState, width: number, selected: boole
 export function navigatorEntry(state: ProjectState, width: number, selected: boolean, widthMethod: WidthMethod = "unicode") {
   const measure = (value: string) => measureEditText(value, { widthMethod });
   const marker = selected ? "▌ " : "  ";
+  const metadataMarker = "  ";
   const contentWidth = Math.max(0, width - measure(marker));
   const name = fitLine(state.project.name, contentWidth, widthMethod);
   const nameLine = fitLine(marker + name, width, widthMethod);
@@ -77,20 +78,32 @@ export function navigatorEntry(state: ProjectState, width: number, selected: boo
   const branch = git.kind === "available" ? git.branch : git.kind === "stale" ? git.previous.branch : "";
   const remote = state.project.repository && state.github.kind !== "available"
     ? state.github.kind === "loading" ? " GH…" : state.github.kind === "stale" ? " GH~" : " GH!" : "";
-  const statusText = fitLine(status, contentWidth, widthMethod);
+  const statusText = fitLine(git.kind === "available" ? `${selected && git.clean ? "✓" : "●"} ${status}` : status, contentWidth, widthMethod);
   const statusStart = Math.max(measure(marker), width - measure(statusText));
-  const leftWidth = Math.max(0, statusStart - measure(marker) - 2);
+  const leftWidth = Math.max(0, statusStart - measure(metadataMarker) - 2);
   const remoteText = remote && leftWidth >= measure(remote) + 5 ? remote : "";
-  const branchText = fitLine(branch || (git.kind === "loading" ? "Git…" : git.kind === "unavailable" ? "Git n/a" : ""), leftWidth - measure(remoteText), widthMethod);
-  const left = marker + branchText + remoteText;
+  const branchText = fitLine(branch ? `⎇ ${branch}` : git.kind === "loading" ? "Git…" : git.kind === "unavailable" ? "Git n/a" : "", leftWidth - measure(remoteText), widthMethod);
+  const left = metadataMarker + branchText + remoteText;
   const spacing = " ".repeat(Math.max(0, statusStart - measure(left)));
   const metadataLine = fitLine(left + spacing + statusText, width, widthMethod);
   const pad = (line: string) => line + " ".repeat(Math.max(0, width - measure(line)));
-  return { nameLine: pad(nameLine), metadataLine: pad(metadataLine), marker, name,
+  return { nameLine: pad(nameLine), metadataLine: pad(metadataLine), marker, metadataMarker, name,
     namePadding: " ".repeat(Math.max(0, width - measure(nameLine))),
     branchText, remoteText, spacing, statusText,
     metadataPadding: " ".repeat(Math.max(0, width - measure(metadataLine))),
     status, statusStart, selected };
+}
+
+export function navigatorHeadingText(count: number, width: number, widthMethod: WidthMethod = "unicode"): string {
+  const label = "PROJECTS";
+  const total = `${count} project${count === 1 ? "" : "s"}`;
+  const measure = (value: string) => measureEditText(value, { widthMethod });
+  if (measure(label + " " + total) > width) return fitLine(label, width, widthMethod);
+  return label + " ".repeat(width - measure(label) - measure(total)) + total;
+}
+
+export function navigatorHeadingHeight(wide: boolean, height: number): number {
+  return wide && height > 1 ? height >= 14 ? 2 : 1 : 0;
 }
 
 export function navigatorView(states: ProjectState[], selected: number, height: number, width: number, widthMethod: WidthMethod = "unicode") {
@@ -106,9 +119,9 @@ export function navigatorView(states: ProjectState[], selected: number, height: 
   return { index, start, entries, twoLine, gap, capacity };
 }
 
-export function navigatorContent(view: ReturnType<typeof navigatorView>, width: number, widthMethod: WidthMethod, heading?: string): StyledText {
+export function navigatorContent(view: ReturnType<typeof navigatorView>, width: number, widthMethod: WidthMethod, heading?: string, headingGap = 0): StyledText {
   const chunks = [];
-  if (heading) chunks.push(fg("#849bab")(fitLine(heading, width, widthMethod) + "\n"));
+  if (heading) chunks.push(fg("#849bab")(fitLine(heading, width, widthMethod) + "\n".repeat(1 + headingGap)));
   if (view.entries.length === 0) chunks.push(fg("#849bab")(fitLine("No projects configured", width, widthMethod)));
   view.entries.forEach((entry, index) => {
     if (index > 0) chunks.push(fg("#849bab")("\n".repeat(1 + view.gap)));
@@ -118,11 +131,11 @@ export function navigatorContent(view: ReturnType<typeof navigatorView>, width: 
       return selectedBg ? bg(selectedBg)(chunk) : chunk;
     };
     if ("nameLine" in entry) {
-      chunks.push(styled(fitLine(entry.marker, width, widthMethod), entry.selected ? "#8ac4eb" : "#849bab"));
+      chunks.push(styled(fitLine(entry.marker, width, widthMethod), entry.selected ? "#f7fbff" : "#849bab"));
       chunks.push(styled(entry.name, entry.selected ? "#f7fbff" : "#d5e4ee", true));
       chunks.push(styled(entry.namePadding, entry.selected ? "#f7fbff" : "#d5e4ee"));
       chunks.push(styled("\n", "#849bab"));
-      chunks.push(styled(fitLine(entry.marker, width, widthMethod) + entry.branchText + entry.remoteText + entry.spacing, entry.selected ? "#b7d0e0" : "#91a8b8"));
+      chunks.push(styled(fitLine(entry.metadataMarker, width, widthMethod) + entry.branchText + entry.remoteText + entry.spacing, entry.selected ? "#b7d0e0" : "#91a8b8"));
       const statusColor = entry.status === "clean" ? "#9bd6ac" : entry.status === "dirty" ? "#e7bd83" : "#a8b9c7";
       chunks.push(styled(entry.statusText + entry.metadataPadding, statusColor));
     } else {
@@ -241,12 +254,13 @@ export async function runDashboard(): Promise<void> {
     detail.width = dimensions.detailWidth; detail.height = dimensions.detailHeight;
     message.height = dimensions.statusHeight; footer.height = dimensions.footerHeight;
     title.content = fitLine("🐺 Wolf Den", dimensions.columns, renderer.widthMethod);
-    const navigatorHeading = dimensions.wide && dimensions.navigatorHeight > 1 ? 1 : 0;
-    const navigatorRows = dimensions.navigatorHeight - navigatorHeading;
+    const navigatorHeadingRows = navigatorHeadingHeight(dimensions.wide, dimensions.navigatorHeight);
+    const navigatorRows = dimensions.navigatorHeight - navigatorHeadingRows;
     const navigator = navigatorView(states, selected, navigatorRows, dimensions.navigatorWidth, renderer.widthMethod);
     selected = navigator.index;
     list.content = navigatorContent(navigator, dimensions.navigatorWidth, renderer.widthMethod,
-      navigatorHeading ? `Projects ${states.length ? `${selected + 1}/${states.length}` : ""}` : undefined);
+      navigatorHeadingRows ? navigatorHeadingText(states.length, dimensions.navigatorWidth, renderer.widthMethod) : undefined,
+      navigatorHeadingRows - 1);
     divider.content = dimensions.wide ? Array(dimensions.dividerHeight).fill("│").join("\n") : "─".repeat(dimensions.dividerWidth);
     const view = showingHelp
       ? { lines: ["Keyboard shortcuts", "↑/↓  Select project", "Tab  Select next PR", "e  Open project in VS Code", "o  Open terminal in project", "g  Open GitHub repository", "p  Open selected PR", "r  Refresh selected project's GitHub data", "PgUp/PgDn  Scroll details", "?  Close help", "q / Esc / Ctrl+C  Quit"], selectedLine: 0 }

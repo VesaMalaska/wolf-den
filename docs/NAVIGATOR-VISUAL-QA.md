@@ -12,10 +12,10 @@ Representative navigator text at a 42-cell width (color and background omitted):
 
 ```text
   Project 10
-  main                               clean
+  ⎇ main                           ● clean
 
 ▌ Pitkä projekti 界界 🐺
-▌ main                               dirty
+  ⎇ main                           ● dirty
 ```
 
-The referenced design screenshot was not included with the pasted request. A real Kitty check is still needed for final color and font judgment; terminal-cell rendering and automated checks establish layout behavior, not pixel-level similarity.
+After the reference image was supplied, the heading was aligned with its project count, the selected marker was confined to the name line, branch and status symbols were added, and a small gap was added below the heading when height permits. The terminal version keeps explicit status words for clarity and omits the screenshot's thin horizontal rules to preserve space for 10–20 project navigation. A real Kitty check is still needed for final color and font judgment; terminal-cell rendering and automated checks establish layout behavior, not pixel-level similarity.

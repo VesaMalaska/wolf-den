@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { measureEditText } from "@opentui/core";
-import { clampSelection, dashboardLayout, detailLines, fitLine, moveProjectSelection, moveSelection, navigatorContent, navigatorEntry, navigatorRow, navigatorView, projectLoadNotice, visibleWindow } from "../src/ui.js";
+import { clampSelection, dashboardLayout, detailLines, fitLine, moveProjectSelection, moveSelection, navigatorContent, navigatorEntry, navigatorHeadingHeight, navigatorHeadingText, navigatorRow, navigatorView, projectLoadNotice, visibleWindow } from "../src/ui.js";
 import type { ProjectState } from "../src/domain.js";
 
 test("wide layout keeps separate panels and fixed feedback rows", () => {
@@ -101,7 +101,7 @@ test("twelve project viewport retains selected row across navigation and resizin
   const states = Array.from({ length: 12 }, (_, index) => projectState(index));
   for (const [width, height] of [[120, 24], [40, 15], [30, 9], [88, 8]]) {
     const layout = dashboardLayout(width!, height!, states.length);
-    const rows = layout.navigatorHeight - (layout.wide && layout.navigatorHeight > 1 ? 1 : 0);
+    const rows = layout.navigatorHeight - navigatorHeadingHeight(layout.wide, layout.navigatorHeight);
     for (let selected = 0; selected < states.length; selected++) {
       const view = navigatorView(states, selected, rows, layout.navigatorWidth, "unicode-wide");
       assert.ok(view.start <= selected && selected < view.start + view.capacity);
@@ -124,18 +124,30 @@ test("two-line entry gives name its own line and right-aligns status without col
   for (const width of [26, 42, 80]) {
     const entry = navigatorEntry(state, width, true, "unicode-wide");
     assert.ok(entry.nameLine.startsWith("▌ "));
-    assert.ok(entry.metadataLine.startsWith("▌ "));
+    assert.ok(entry.metadataLine.startsWith("  ⎇ "));
     assert.ok(entry.nameLine.includes("Pitkä"));
     assert.ok(!entry.nameLine.includes("dirty"));
     assert.ok(entry.metadataLine.trimEnd().endsWith("dirty"));
     assert.equal(measureEditText(entry.nameLine, { widthMethod: "unicode-wide" }), width);
     assert.equal(measureEditText(entry.metadataLine, { widthMethod: "unicode-wide" }), width);
-    assert.equal(entry.statusStart, width - 5);
-    assert.ok(measureEditText(entry.marker + entry.branchText + entry.remoteText, { widthMethod: "unicode-wide" }) <= entry.statusStart - 2);
+    assert.equal(entry.statusStart, width - 7);
+    assert.ok(measureEditText(entry.metadataMarker + entry.branchText + entry.remoteText, { widthMethod: "unicode-wide" }) <= entry.statusStart - 2);
   }
   const narrow = navigatorEntry(state, 12, true, "unicode-wide");
   assert.ok(narrow.nameLine.includes("…"));
   assert.ok(narrow.metadataLine.trimEnd().endsWith("dirty"));
+});
+
+test("navigator heading keeps project count at the right edge", () => {
+  const heading = navigatorHeadingText(4, 42, "unicode-wide");
+  assert.ok(heading.startsWith("PROJECTS"));
+  assert.ok(heading.endsWith("4 projects"));
+  assert.equal(measureEditText(heading, { widthMethod: "unicode-wide" }), 42);
+  assert.equal(navigatorHeadingText(1, 42).trimEnd().endsWith("1 project"), true);
+  assert.equal(navigatorHeadingText(20, 8), "PROJECTS");
+  assert.equal(navigatorHeadingHeight(true, 17), 2);
+  assert.equal(navigatorHeadingHeight(true, 5), 1);
+  assert.equal(navigatorHeadingHeight(false, 17), 0);
 });
 
 test("viewport keeps complete two-line entries and uses single-line fallback for short windows", () => {
