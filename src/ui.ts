@@ -3,6 +3,7 @@ import { ProjectActions } from "./actions.js";
 import type { ProjectState } from "./domain.js";
 import { GithubRefresh, loadProjectStates } from "./projects.js";
 import { loadConfiguration, RegistryError } from "./registry.js";
+import { resolveTheme, type SemanticTheme } from "./theme.js";
 
 function safeText(value: string): string { return value.replace(/[\x00-\x1f\x7f-\x9f]/g, " "); }
 
@@ -111,27 +112,30 @@ export function navigatorView(states: ProjectState[], selected: number, height: 
   return { index, start, entries, twoLine, gap, capacity };
 }
 
-export function navigatorContent(view: ReturnType<typeof navigatorView>, width: number, widthMethod: WidthMethod, heading?: string, headingGap = 0): StyledText {
+export function navigatorContent(view: ReturnType<typeof navigatorView>, width: number, widthMethod: WidthMethod, heading?: string, headingGap = 0, theme: SemanticTheme = resolveTheme()): StyledText {
   const chunks = [];
-  if (heading) chunks.push(fg("#849bab")(fitLine(heading, width, widthMethod) + "\n".repeat(1 + headingGap)));
-  if (view.entries.length === 0) chunks.push(fg("#849bab")(fitLine("No projects configured", width, widthMethod)));
+  if (heading) chunks.push(fg(theme.heading)(fitLine(heading, width, widthMethod) + "\n".repeat(1 + headingGap)));
+  if (view.entries.length === 0) chunks.push(fg(theme.textMuted)(fitLine("No projects configured", width, widthMethod)));
   view.entries.forEach((entry, index) => {
-    if (index > 0) chunks.push(fg("#849bab")("\n".repeat(1 + view.gap)));
-    const selectedBg = entry.selected ? "#29465c" : undefined;
+    if (index > 0) chunks.push(fg(theme.textMuted)("\n".repeat(1 + view.gap)));
+    const selectedBg = entry.selected ? theme.selectionBackground : undefined;
     const styled = (value: string, color: string, strong = false) => {
       const chunk = fg(color)(strong ? bold(value) : value);
       return selectedBg ? bg(selectedBg)(chunk) : chunk;
     };
     if ("nameLine" in entry) {
-      chunks.push(styled(fitLine(entry.marker, width, widthMethod), entry.selected ? "#f7fbff" : "#849bab"));
-      chunks.push(styled(entry.name, entry.selected ? "#f7fbff" : "#d5e4ee", true));
-      chunks.push(styled(entry.namePadding, entry.selected ? "#f7fbff" : "#d5e4ee"));
-      chunks.push(styled("\n", "#849bab"));
-      chunks.push(styled(fitLine(entry.metadataMarker, width, widthMethod) + entry.branchText + entry.remoteText + entry.spacing, entry.selected ? "#b7d0e0" : "#91a8b8"));
-      const statusColor = entry.status === "clean" ? "#9bd6ac" : entry.status === "dirty" ? "#e7bd83" : "#a8b9c7";
-      chunks.push(styled(entry.statusText + entry.metadataPadding, statusColor));
+      chunks.push(styled(fitLine(entry.marker, width, widthMethod), entry.selected ? theme.focusBorder : theme.textMuted));
+      chunks.push(styled(entry.name, entry.selected ? theme.textOnSelection : theme.textPrimary, true));
+      chunks.push(styled(entry.namePadding, entry.selected ? theme.textOnSelection : theme.textPrimary));
+      chunks.push(styled("\n", theme.textMuted));
+      chunks.push(styled(fitLine(entry.metadataMarker, width, widthMethod) + entry.branchText + entry.remoteText + entry.spacing, entry.selected ? theme.textOnSelection : theme.textSecondary));
+      const statusColor = entry.status === "clean" ? theme.success : entry.status === "dirty" ? theme.attention
+        : entry.status === "loading" ? theme.info : entry.status === "stale" ? theme.attention : theme.unavailable;
+      // Selected rows keep a consistently readable foreground; labels and markers retain status meaning.
+      chunks.push(styled(entry.statusText + entry.metadataPadding, entry.selected ? theme.textOnSelection : statusColor));
     } else {
-      chunks.push(styled(entry.text, entry.selected ? "#f7fbff" : entry.status === "dirty" ? "#e4ba78" : "#c6d5df"));
+      chunks.push(styled(entry.text, entry.selected ? theme.textOnSelection : entry.status === "clean" ? theme.success
+        : entry.status === "dirty" || entry.status === "stale" ? theme.attention : entry.status === "loading" ? theme.info : theme.unavailable));
     }
   });
   return new StyledText(chunks);
@@ -161,7 +165,7 @@ export function dashboardLayout(width: number, height: number, projectCount: num
     navigatorHeight, dividerHeight, detailHeight: contentHeight - navigatorHeight - dividerHeight };
 }
 
-type DetailTone = "heading" | "title" | "muted" | "normal" | "good" | "warn" | "error" | "selected";
+type DetailTone = "heading" | "accent" | "accentSubtle" | "title" | "muted" | "normal" | "good" | "warn" | "error" | "unavailable" | "selected";
 type DetailRow = { text: string; tone: DetailTone };
 
 function wrapped(value: string, width: number, widthMethod: WidthMethod): string[] {
@@ -182,16 +186,16 @@ function wrapped(value: string, width: number, widthMethod: WidthMethod): string
 export function detailLines(state: ProjectState | undefined, selectedPr: number, width = 80, widthMethod: WidthMethod = "unicode"): { lines: string[]; rows: DetailRow[]; selectedLine: number } {
   const rows: DetailRow[] = [];
   const add = (text: string, tone: DetailTone = "normal") => rows.push({ text, tone });
-  const section = (label: string) => { if (rows.length) add("", "muted"); add(`  ${label}`, "heading"); };
+  const section = (label: string) => { if (rows.length) add("", "muted"); add(`  ${label}`, label === "NEXT ACTION" ? "accentSubtle" : "heading"); };
   if (!state) { add("  No projects configured. Add a project to the registry.", "muted"); return { lines: rows.map(row => row.text), rows, selectedLine: 0 }; }
   add(`  ${safeText(state.project.name)}`, "title");
   add(`  ${safeText(state.project.lifecycle)}  ·  ${safeText(state.project.path)}`, "muted");
   section("NEXT ACTION");
-  for (const line of wrapped(state.project.nextAction ?? "Not set", Math.max(1, width - 4), widthMethod)) add(`    ${line}`, state.project.nextAction ? "normal" : "muted");
+  for (const line of wrapped(state.project.nextAction ?? "Not set", Math.max(1, width - 4), widthMethod)) add(`    ${line}`, state.project.nextAction ? "accent" : "muted");
   section("LOCAL GIT");
   const git = state.git;
   if (git.kind === "loading") add("    Loading Git state…", "muted");
-  else if (git.kind === "unavailable") add(`    Unavailable · ${safeText(git.reason)}`, "error");
+  else if (git.kind === "unavailable") add(`    Unavailable · ${safeText(git.reason)}`, "unavailable");
   else if (git.kind === "stale") add(`    Stale · ${safeText(git.previous.branch)} · ${safeText(git.reason)}`, "warn");
   else {
     add(`    ${git.detached ? "Detached HEAD" : `Branch ${safeText(git.branch)}`}  ·  ${git.clean ? "Clean" : "Dirty"}`, git.clean ? "good" : "warn");
@@ -200,7 +204,7 @@ export function detailLines(state: ProjectState | undefined, selectedPr: number,
   section("GITHUB");
   const remote = state.github;
   const data = remote.kind === "available" ? remote : remote.kind === "stale" || remote.kind === "loading" ? remote.previous : undefined;
-  if (remote.kind === "unavailable") add(`    Unavailable · ${safeText(remote.reason)}`, "error");
+  if (remote.kind === "unavailable") add(`    Unavailable · ${safeText(remote.reason)}`, "unavailable");
   else {
     if (remote.kind === "loading") add(`    Loading${data ? " · previous data below" : "…"}`, "muted");
     if (remote.kind === "stale") add(`    Stale · ${safeText(remote.reason)}`, "warn");
@@ -230,6 +234,16 @@ export function scrollToLine(offset: number, line: number, height: number): numb
 }
 
 export type Feedback = { kind: "loading" | "success" | "error" | "unavailable" | "info"; text: string; projectId?: string };
+export function feedbackColor(kind: Feedback["kind"], theme: SemanticTheme): string {
+  return { loading: theme.info, success: theme.success, error: theme.error, unavailable: theme.unavailable, info: theme.info }[kind];
+}
+
+export function detailToneColor(tone: DetailTone, theme: SemanticTheme): string {
+  return { heading: theme.heading, accent: theme.accent, accentSubtle: theme.accentSubtle,
+    title: theme.textPrimary, muted: theme.textMuted, normal: theme.textSecondary,
+    good: theme.success, warn: theme.attention, error: theme.error, unavailable: theme.unavailable,
+    selected: theme.textOnSelection }[tone];
+}
 export function feedbackForSelection(feedback: Feedback, projectId?: string): Feedback {
   return feedback.projectId && feedback.projectId !== projectId ? { kind: "info", text: "Select a project to view its current status." } : feedback;
 }
@@ -270,7 +284,8 @@ export function projectActionForKey(key: ProjectActionKey, actions: ProjectActio
 }
 
 export async function runDashboard(): Promise<void> {
-  const renderer = await createCliRenderer({ exitOnCtrlC: true });
+  let theme = resolveTheme();
+  const renderer = await createCliRenderer({ exitOnCtrlC: true, backgroundColor: theme.background });
   let destroyed = false;
   let states: ProjectState[] = [];
   let selected = 0;
@@ -283,14 +298,14 @@ export async function runDashboard(): Promise<void> {
   let detailOffset = 0;
   const refresh = new GithubRefresh();
   let actions: ProjectActions | undefined;
-  const layout = new BoxRenderable(renderer, { flexDirection: "column", gap: 0, width: "100%", height: "100%" });
-  const title = new TextRenderable(renderer, { content: "Wolf Den", fg: "#9fd4ff" });
-  const panels = new BoxRenderable(renderer, { flexDirection: "row", gap: 0, width: "100%" });
-  const list = new TextRenderable(renderer, { content: "", fg: "#ffffff" });
-  const divider = new TextRenderable(renderer, { content: "", fg: "#668198" });
-  const detail = new TextRenderable(renderer, { content: "", fg: "#d6e4ee" });
-  const message = new TextRenderable(renderer, { content: "", fg: "#ffd58a" });
-  const footer = new TextRenderable(renderer, { content: "", fg: "#9aa9b7" });
+  const layout = new BoxRenderable(renderer, { flexDirection: "column", gap: 0, width: "100%", height: "100%", backgroundColor: theme.background });
+  const title = new TextRenderable(renderer, { content: "Wolf Den", fg: theme.heading });
+  const panels = new BoxRenderable(renderer, { flexDirection: "row", gap: 0, width: "100%", backgroundColor: theme.panel });
+  const list = new TextRenderable(renderer, { content: "", fg: theme.textPrimary });
+  const divider = new TextRenderable(renderer, { content: "", fg: theme.divider });
+  const detail = new TextRenderable(renderer, { content: "", fg: theme.textSecondary });
+  const message = new TextRenderable(renderer, { content: "", fg: theme.attention, bg: theme.panelAlt });
+  const footer = new TextRenderable(renderer, { content: "", fg: theme.textMuted });
   layout.add(title);
   panels.add(list);
   panels.add(divider);
@@ -317,25 +332,23 @@ export async function runDashboard(): Promise<void> {
     selected = navigator.index;
     list.content = navigatorContent(navigator, dimensions.navigatorWidth, renderer.widthMethod,
       navigatorHeadingRows ? navigatorHeadingText(states.length, dimensions.navigatorWidth, renderer.widthMethod) : undefined,
-      navigatorHeadingRows - 1);
+      navigatorHeadingRows - 1, theme);
     divider.content = dimensions.wide ? Array(dimensions.dividerHeight).fill("│").join("\n") : "─".repeat(dimensions.dividerWidth);
     const view = showingHelp
       ? { lines: ["Keyboard shortcuts", "↑/↓  Select project", "Tab  Select next PR", "e  Open project in VS Code", "t  Open terminal in project", "f  Open project in file manager", "g  Open GitHub repository", "p  Open selected PR", "r  Refresh selected project's GitHub data", "PgUp/PgDn  Scroll details", "?  Close help", "q / Esc / Ctrl+C  Quit"], selectedLine: 0 }
       : registryLoaded ? detailLines(states[selected], selectedPr, dimensions.detailWidth, renderer.widthMethod) : { lines: [feedback.text], selectedLine: 0 };
     detailOffset = Math.min(detailOffset, Math.max(0, view.lines.length - dimensions.detailHeight));
-    const tones: Record<DetailTone, string> = { heading: "#849bab", title: "#f0f7fc", muted: "#91a8b8", normal: "#d6e4ee", good: "#9bd6ac", warn: "#e7bd83", error: "#ed9a9a", selected: "#f7fbff" };
     detail.content = "rows" in view && view.rows
       ? new StyledText(view.rows.slice(detailOffset, detailOffset + dimensions.detailHeight).flatMap((row, index, visible) => {
           const line = fitLine(row.text, dimensions.detailWidth, renderer.widthMethod);
           const content = row.tone === "title" || row.tone === "heading" || row.tone === "selected" ? bold(line) : line;
-          const styled = fg(tones[row.tone])(row.tone === "selected" ? bg("#29465c")(content) : content);
-          return index === visible.length - 1 ? [styled] : [styled, fg(tones.muted)("\n")];
+          const styled = fg(detailToneColor(row.tone, theme))(row.tone === "selected" ? bg(theme.selectionBackground)(content) : content);
+          return index === visible.length - 1 ? [styled] : [styled, fg(theme.textMuted)("\n")];
         }))
       : view.lines.slice(detailOffset, detailOffset + dimensions.detailHeight).map(line => fitLine(line, dimensions.detailWidth, renderer.widthMethod)).join("\n");
     const shown = feedbackForSelection(feedback, states[selected]?.project.id);
     const labels = { loading: "…", success: "✓", error: "!", unavailable: "!", info: "·" };
-    const colors = { loading: "#9fc8de", success: "#9bd6ac", error: "#ed9a9a", unavailable: "#e7bd83", info: "#a8b9c7" };
-    message.fg = colors[shown.kind];
+    message.fg = feedbackColor(shown.kind, theme);
     message.content = fitLine(`${labels[shown.kind]} ${shown.text}`, dimensions.columns, renderer.widthMethod);
     const shortcuts = dimensions.columns < 18 ? "? q" : dimensions.columns < 45
       ? "? help · q quit · ↑/↓ project · Tab PR"
@@ -408,6 +421,16 @@ export async function runDashboard(): Promise<void> {
   try {
     const configuration = await loadConfiguration();
     if (destroyed) return;
+    theme = resolveTheme(configuration.settings.theme, configuration.settings.themeOverrides);
+    renderer.setBackgroundColor(theme.background);
+    layout.backgroundColor = theme.background;
+    panels.backgroundColor = theme.panel;
+    title.fg = theme.heading;
+    list.fg = theme.textPrimary;
+    divider.fg = theme.divider;
+    detail.fg = theme.textSecondary;
+    message.bg = theme.panelAlt;
+    footer.fg = theme.textMuted;
     actions = new ProjectActions(undefined, undefined, configuration.settings.terminal);
     const projects = configuration.projects;
     registryLoaded = true;

@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { z } from "zod";
 import type { Project, TerminalPreference } from "./domain.js";
+import { defaultThemeId, rgbColorPattern, themeIds, themeTokens, type ThemeId, type ThemeToken } from "./theme.js";
 
 const projectSchema = z.strictObject({
   id: z.string().trim().min(1).regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/),
@@ -16,11 +17,13 @@ const registrySchema = z.strictObject({
   version: z.literal(1),
   settings: z.strictObject({
     terminal: z.enum(["system", "kitty", "konsole", "gnome-terminal", "xfce4-terminal", "alacritty", "xterm"]).default("system"),
-  }).default({ terminal: "system" }),
+    theme: z.enum(themeIds, { error: `Choose a supported theme: ${themeIds.join(", ")}.` }).default(defaultThemeId),
+    themeOverrides: z.partialRecord(z.enum(themeTokens), z.string().regex(rgbColorPattern, "Use a hexadecimal RGB color in #RRGGBB format.")).default({}),
+  }).prefault({}),
   projects: z.array(projectSchema),
 });
 
-export type RegistryConfiguration = { projects: Project[]; settings: { terminal: TerminalPreference } };
+export type RegistryConfiguration = { projects: Project[]; settings: { terminal: TerminalPreference; theme: ThemeId; themeOverrides: Partial<Record<ThemeToken, string>> } };
 
 export class RegistryError extends Error {}
 

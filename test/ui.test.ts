@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { measureEditText } from "@opentui/core";
 import { ProjectActions } from "../src/actions.js";
-import { clampSelection, dashboardLayout, detailLines, feedbackForSelection, fitLine, isProjectActionKey, moveProjectSelection, moveSelection, navigatorContent, navigatorEntry, navigatorHeadingHeight, navigatorHeadingText, navigatorRow, navigatorView, projectActionForKey, projectLoadNotice, scrollToLine, visibleWindow } from "../src/ui.js";
+import { clampSelection, dashboardLayout, detailLines, detailToneColor, feedbackColor, feedbackForSelection, fitLine, isProjectActionKey, moveProjectSelection, moveSelection, navigatorContent, navigatorEntry, navigatorHeadingHeight, navigatorHeadingText, navigatorRow, navigatorView, projectActionForKey, projectLoadNotice, scrollToLine, visibleWindow } from "../src/ui.js";
+import { resolveTheme } from "../src/theme.js";
 import type { ProjectState } from "../src/domain.js";
 
 test("wide layout keeps separate panels and fixed feedback rows", () => {
@@ -197,10 +198,31 @@ test("viewport keeps complete two-line entries and uses single-line fallback for
 test("selected project highlight covers both lines and stops before the next entry", () => {
   const view = navigatorView([projectState(0), projectState(1)], 0, 6, 32, "unicode-wide");
   const content = navigatorContent(view, 32, "unicode-wide");
-  const selected = content.chunks.filter(chunk => chunk.bg?.toInts().slice(0, 3).join() === "41,70,92");
+  const selected = content.chunks.filter(chunk => chunk.bg?.toInts().slice(0, 3).join() === "41,77,112");
   assert.equal(selected.map(chunk => chunk.text).join(""), (view.entries[0] as ReturnType<typeof navigatorEntry>).nameLine + "\n" + (view.entries[0] as ReturnType<typeof navigatorEntry>).metadataLine);
   assert.ok(content.chunks.some(chunk => chunk.text.includes("Project 1") && !chunk.bg));
   assert.ok(content.chunks.some(chunk => chunk.text.includes("Project 0") && ((chunk.attributes ?? 0) & 1) !== 0));
+});
+
+test("semantic overrides reach navigator selection, statuses and detail feedback", () => {
+  const theme = resolveTheme("wolfy-dark", { selectionBackground: "#405060", success: "#AABBCC", error: "#DDEEFF", heading: "#ABCDEF" });
+  const view = navigatorView([projectState(0), projectState(2)], 1, 4, 32, "unicode-wide");
+  const content = navigatorContent(view, 32, "unicode-wide", "PROJECTS", 0, theme);
+  assert.ok(content.chunks.some(chunk => chunk.bg?.toInts().slice(0, 3).join() === "64,80,96"));
+  assert.ok(content.chunks.some(chunk => chunk.text.includes("clean") && chunk.fg?.toInts().slice(0, 3).join() === "170,187,204"));
+  assert.ok(content.chunks.some(chunk => chunk.text.includes("PROJECTS") && chunk.fg?.toInts().slice(0, 3).join() === "171,205,239"));
+  assert.equal(detailToneColor("good", theme), theme.success);
+  assert.equal(detailToneColor("error", theme), theme.error);
+  assert.equal(detailToneColor("unavailable", theme), theme.unavailable);
+  assert.equal(detailToneColor("accent", theme), theme.accent);
+  assert.equal(detailToneColor("accentSubtle", theme), theme.accentSubtle);
+  assert.equal(feedbackColor("error", theme), theme.error);
+  assert.equal(feedbackColor("loading", theme), theme.info);
+  const dirty = projectState(1);
+  const detail = detailLines(dirty, -1);
+  assert.ok(detail.rows.some(row => row.tone === "warn" && row.text.includes("Dirty")));
+  dirty.project.nextAction = "Review PR";
+  assert.ok(detailLines(dirty, -1).rows.some(row => row.tone === "accent" && row.text.includes("Review PR")));
 });
 
 test("long Unicode names clip safely in narrow navigator rows", () => {
@@ -252,7 +274,7 @@ test("detail hierarchy preserves manual action and separates local and remote st
   assert.deepEqual(view.lines.filter(line => /NEXT ACTION|LOCAL GIT|GITHUB/.test(line)).map(line => line.trim()), ["NEXT ACTION", "LOCAL GIT", "GITHUB"]);
   assert.ok(view.lines.includes("    Review  界界  this exact task"));
   assert.match(view.lines.join("\n"), /Branch feature\/details  ·  Dirty.*staged · untracked.*GITHUB.*Unavailable · Offline/s);
-  assert.ok(view.rows.some(row => row.tone === "error"));
+  assert.ok(view.rows.some(row => row.tone === "unavailable"));
   state.git = { kind: "available", branch: "abc123", detached: true, staged: false, unstaged: false, untracked: false, clean: true };
   assert.match(detailLines(state, -1).lines.join("\n"), /Detached HEAD  ·  Clean/);
 });
