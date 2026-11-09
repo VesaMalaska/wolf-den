@@ -31,6 +31,15 @@ Read `README.md` and `docs/ROADMAP.md` before changing scope. Follow the current
 
 Do not add new dependencies, a framework, database, agents, background services, global hooks or CI complexity without a demonstrated need. Keep docs current when behavior changes.
 
+## v0.3 UX and editable local configuration boundaries
+- Read [the approved v0.3 UX/config specification](docs/V0.3-UX-AND-CONFIG-SPEC.md) for theme, cockpit, Settings, project management and next-action work.
+- Git/GitHub remain read-only. v0.3 may write **only Wolf Den's own local JSON registry** via a validated, atomic, conflict-aware configuration service; never change project files/repositories.
+- Preserve compatibility with existing version-1 registries and the terminal setting; reject invalid values with clear errors, and never silently overwrite external edits.
+- Keep semantic theme tokens centralized; avoid scattered hardcoded colors. `Wolfy Dark` is the only initial built-in theme; future themes must be composable.
+- Never imply a terminal font selector works; fonts belong to the user's emulator.
+- Preserve keyboard accessibility, truthful status and compact layouts. Avoid fabricated urgency/health metrics.
+- Each v0.3 issue has its own branch/PR and owner gate; no release tag without explicit approval.
+
 ## Definition of done
 - Meets the assigned issue's acceptance criteria.
 - Correctly distinguishes loading, available, stale and unavailable data.

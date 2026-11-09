@@ -10,6 +10,10 @@ Wolf Den answers three questions:
 ## Status
 **v0.2.0 released.** The responsive dashboard, multi-project navigator, selected-project details and safe quick actions have passed human acceptance in Kitty on openSUSE Tumbleweed. See the [v0.2.0 GitHub release](https://github.com/VesaMalaska/wolf-den/releases/tag/v0.2.0) and [QA report](docs/V0.2-RELEASE-QA.md).
 
+## Roadmap — planned v0.3
+
+The next milestone will improve the cockpit's information hierarchy and project overview, introduce a customizable **Wolfy Dark** semantic color theme, add an in-app Settings view, and provide safe Add/Remove Project and direct Next Action editing. These features are **planned, not included in v0.2.0**. See the [v0.3 UX and configuration specification](docs/V0.3-UX-AND-CONFIG-SPEC.md) and [roadmap](docs/ROADMAP.md).
+
 ## Open source and portfolio
 
 Wolf Den is a local-first, read-only terminal dashboard built with TypeScript, Node.js and OpenTUI. It combines local Git status, optional GitHub activity and keyboard-driven project shortcuts. See [LICENSE](LICENSE) for the MIT license.
