@@ -131,15 +131,15 @@ The approved direction and architecture are specified in [v0.3 Cockpit UX, theme
 - Keep Dingu's work small, issue-based and independently reviewable with human PR approval.
 - No database, background sync, auto-discovery, AI agent, task manager, arbitrary repository commands or font picker.
 
-### Implementation slices (issues created separately after docs)
-1. Theme registry, semantic tokens and Wolfy Dark preset.
-2. Cockpit hierarchy, project radar and next-action prominence.
-3. Compact PRs, selected PR details and contextual footer.
-4. Safe version-1 registry persistence with atomic writes and conflict detection.
-5. Dedicated Settings view: theme preview/overrides and terminal setting.
-6. Projects management: add/edit/remove from Den.
-7. Direct next-action editor.
-8. Real Kitty regression/visual QA, docs and v0.3 release gate.
+### Implementation issues (in review/dependency order)
+1. [#22 — Theme foundation and Wolfy Dark](https://github.com/VesaMalaska/wolf-den/issues/22) — semantic tokens, preset, backward-compatible read-only config.
+2. [#23 — Cockpit hierarchy and project radar](https://github.com/VesaMalaska/wolf-den/issues/23) — factual multi-project glanceability, next action and status hierarchy; depends on #22.
+3. [#24 — Compact PRs and contextual footer](https://github.com/VesaMalaska/wolf-den/issues/24) — draft/open distinctions, selected PR detail and meaningful help; depends on #23.
+4. [#25 — Safe registry persistence](https://github.com/VesaMalaska/wolf-den/issues/25) — atomic validated writes, conflict detection and non-destructive saves; depends on #22.
+5. [#26 — Settings view](https://github.com/VesaMalaska/wolf-den/issues/26) — Appearance/General, live theme preview/save/reset, terminal setting; depends on #22, #24 and #25.
+6. [#27 — Project manager](https://github.com/VesaMalaska/wolf-den/issues/27) — explicit Add/Edit/Remove from Den; depends on #25 and #26.
+7. [#28 — Direct next-action editor](https://github.com/VesaMalaska/wolf-den/issues/28) — quick manual edit/clear; depends on #23, #25 and #27.
+8. [#29 — Real Kitty QA and v0.3 release gate](https://github.com/VesaMalaska/wolf-den/issues/29) — end-to-end acceptance and safe release readiness; depends on #22–#28.
 
 **Release gate:** accessible keyboard navigation and readable 120×32, 100×25, 80×24, 56×22 and 42×18 displays; verified safe configuration mutations, failure recovery and real Kitty usability. Tag/release only with explicit owner approval.
 
