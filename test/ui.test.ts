@@ -198,7 +198,7 @@ test("viewport keeps complete two-line entries and uses single-line fallback for
 test("selected project highlight covers both lines and stops before the next entry", () => {
   const view = navigatorView([projectState(0), projectState(1)], 0, 6, 32, "unicode-wide");
   const content = navigatorContent(view, 32, "unicode-wide");
-  const selected = content.chunks.filter(chunk => chunk.bg?.toInts().slice(0, 3).join() === "53,81,106");
+  const selected = content.chunks.filter(chunk => chunk.bg?.toInts().slice(0, 3).join() === "53,86,117");
   assert.equal(selected.map(chunk => chunk.text).join(""), (view.entries[0] as ReturnType<typeof navigatorEntry>).nameLine + "\n" + (view.entries[0] as ReturnType<typeof navigatorEntry>).metadataLine);
   assert.ok(content.chunks.some(chunk => chunk.text.includes("Project 1") && !chunk.bg));
   assert.ok(content.chunks.some(chunk => chunk.text.includes("Project 0") && ((chunk.attributes ?? 0) & 1) !== 0));

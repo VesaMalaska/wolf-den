@@ -30,16 +30,28 @@ test("default resolution uses Wolfy Dark and overrides only selected roles", () 
   assert.equal(changed.accent, "#112233");
   assert.equal(changed.selectionBackground, "#405060");
   assert.equal(changed.success, themePresets["wolfy-dark"].success);
-  assert.equal(themePresets["wolfy-dark"].accent, "#AE8ACB");
+  assert.equal(themePresets["wolfy-dark"].accent, "#C5A2E5");
 });
 
 test("Wolfy Dark keeps primary, secondary, status and selection text readable", () => {
   const theme = resolveTheme();
-  for (const foreground of [theme.textPrimary, theme.textSecondary, theme.textMuted, theme.success, theme.attention, theme.error, theme.unavailable, theme.info]) {
-    assert.ok(contrast(foreground, theme.panel) >= 4.5, `${foreground} on panel`);
+  for (const surface of [theme.panel, theme.panelAlt]) {
+    for (const foreground of [theme.textPrimary, theme.textSecondary, theme.textMuted, theme.success, theme.attention, theme.error, theme.unavailable, theme.info]) {
+      assert.ok(contrast(foreground, surface) >= 4.5, `${foreground} on ${surface}`);
+    }
   }
   assert.ok(contrast(theme.textOnSelection, theme.selectionBackground) >= 4.5);
-  assert.ok(contrast(theme.heading, theme.background) >= 4.5);
+  assert.ok(contrast(theme.focusBorder, theme.selectionBackground) >= 4.5);
+  assert.ok(contrast(theme.heading, theme.panel) >= 4.5);
   assert.ok(contrast(theme.accent, theme.panel) >= 4.5);
   assert.ok(contrast(theme.accentSubtle, theme.panel) >= 4.5);
+});
+
+test("Wolfy Dark surfaces have a distinct dark-to-light hierarchy", () => {
+  const theme = resolveTheme();
+  assert.ok(luminance(theme.background) < luminance(theme.panel));
+  assert.ok(luminance(theme.panel) < luminance(theme.panelAlt));
+  assert.ok(contrast(theme.background, theme.panel) >= 1.15);
+  assert.ok(contrast(theme.panel, theme.panelAlt) >= 1.15);
+  assert.ok(contrast(theme.divider, theme.panel) >= 3);
 });
