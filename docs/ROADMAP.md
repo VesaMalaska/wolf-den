@@ -110,6 +110,39 @@ The implemented navigator uses two-line entries when space allows and one-line e
 - Any v0.1 release gate is separate from v0.2 acceptance; this roadmap does not imply a v0.1 release was tagged.
 - Do not tag v0.2 before visual/manual QA and explicit human approval.
 
+## v0.3 — The Wolf's cockpit and configurable den (approved; implementation pending)
+
+**Goal:** A professional, distinctive developer cockpit that answers both *what needs attention across projects* and *what should I do next in the selected project*. Add editable local configuration without mutating Git or GitHub.
+
+The approved direction and architecture are specified in [v0.3 Cockpit UX, themes and editable configuration](V0.3-UX-AND-CONFIG-SPEC.md). This is planned work, not shipped v0.2 behavior.
+
+### Experience goals
+- **Project radar (left):** factual multi-project overview, readable states, aggregate Git signals and optional available GitHub counts. No invented project-health or urgency metric.
+- **Selected project (right):** clear identity, highly visible editable manual next action, distinct Git and GitHub zones, and less repetitive PR summaries.
+- **PRs and footer:** compact open/draft rows, selected PR detail, useful truncation, contextual keyboard hints and accessible compact modes.
+- **Wolf Den identity:** semantic color tokens; a first built-in, customizable *Wolfy Dark* theme (moonlight, plum, forest, amber). Future presets possible without UI rewrites.
+- **Settings (`s` proposed):** separate Appearance, Projects, General views; safe preview/save/cancel/reset. Existing terminal preference becomes editable. Terminal font selection is **not supported** by the app.
+- **Projects:** add, edit basic metadata, and *Remove from Den* (registry entry only; never delete directories or Git repositories).
+- **Next action (`n` proposed):** edit/clear manual next action directly from the dashboard without using JSON editor.
+
+### Architecture and scope rules
+- Extend existing version-1 JSON registry with optional theme fields; preserve existing user configs and the read-only Git/GitHub boundary.
+- Implement validated, atomic, conflict-aware local configuration writes **before** building any feature that saves settings/projects/next actions.
+- Keep Dingu's work small, issue-based and independently reviewable with human PR approval.
+- No database, background sync, auto-discovery, AI agent, task manager, arbitrary repository commands or font picker.
+
+### Implementation slices (issues created separately after docs)
+1. Theme registry, semantic tokens and Wolfy Dark preset.
+2. Cockpit hierarchy, project radar and next-action prominence.
+3. Compact PRs, selected PR details and contextual footer.
+4. Safe version-1 registry persistence with atomic writes and conflict detection.
+5. Dedicated Settings view: theme preview/overrides and terminal setting.
+6. Projects management: add/edit/remove from Den.
+7. Direct next-action editor.
+8. Real Kitty regression/visual QA, docs and v0.3 release gate.
+
+**Release gate:** accessible keyboard navigation and readable 120×32, 100×25, 80×24, 56×22 and 42×18 displays; verified safe configuration mutations, failure recovery and real Kitty usability. Tag/release only with explicit owner approval.
+
 ## Later candidates (not approved for implementation)
 'Where Was I?' resume summary, recent commits, filters/search, cross-repo review queue, optional doc extraction and project discovery. Later ideas: Codex integration, session handovers and notifications. Add only to solve observed needs.
 
