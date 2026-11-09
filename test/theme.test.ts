@@ -30,7 +30,7 @@ test("default resolution uses Wolfy Dark and overrides only selected roles", () 
   assert.equal(changed.accent, "#112233");
   assert.equal(changed.selectionBackground, "#405060");
   assert.equal(changed.success, themePresets["wolfy-dark"].success);
-  assert.equal(themePresets["wolfy-dark"].accent, "#C5A2E5");
+  assert.equal(themePresets["wolfy-dark"].accent, "#D29BF4");
 });
 
 test("Wolfy Dark keeps primary, secondary, status and selection text readable", () => {
@@ -42,9 +42,12 @@ test("Wolfy Dark keeps primary, secondary, status and selection text readable", 
   }
   assert.ok(contrast(theme.textOnSelection, theme.selectionBackground) >= 4.5);
   assert.ok(contrast(theme.focusBorder, theme.selectionBackground) >= 4.5);
+  assert.ok(contrast(theme.selectionBackground, theme.panel) >= 1.5);
   assert.ok(contrast(theme.heading, theme.panel) >= 4.5);
   assert.ok(contrast(theme.accent, theme.panel) >= 4.5);
   assert.ok(contrast(theme.accentSubtle, theme.panel) >= 4.5);
+  assert.ok(luminance(theme.textPrimary) > luminance(theme.textSecondary));
+  assert.ok(luminance(theme.textSecondary) > luminance(theme.textMuted));
 });
 
 test("Wolfy Dark surfaces have a distinct dark-to-light hierarchy", () => {
