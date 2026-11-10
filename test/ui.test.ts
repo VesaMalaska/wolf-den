@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { measureEditText } from "@opentui/core";
 import { ProjectActions } from "../src/actions.js";
-import { clampSelection, dashboardLayout, detailLines, detailToneColor, feedbackColor, feedbackForSelection, fitLine, isProjectActionKey, moveProjectSelection, moveSelection, navigatorContent, navigatorEntry, navigatorHeadingHeight, navigatorHeadingText, navigatorRow, navigatorView, projectActionForKey, projectLoadNotice, scrollToLine, visibleWindow } from "../src/ui.js";
+import { clampSelection, dashboardLayout, detailLines, detailToneColor, feedbackColor, feedbackForSelection, fitBranch, fitLine, isProjectActionKey, moveProjectSelection, moveSelection, navigatorContent, navigatorEntry, navigatorHeadingHeight, navigatorHeadingText, navigatorRow, navigatorView, projectActionForKey, projectLoadNotice, radarContent, radarSummary, scrollToLine, visibleWindow } from "../src/ui.js";
 import { resolveTheme } from "../src/theme.js";
 import type { ProjectState } from "../src/domain.js";
 
@@ -53,7 +53,7 @@ test("selected PR stays in details while loading and stale remote state remains 
   assert.match(loading.lines.join("\n"), /Loading · previous data below/);
   assert.match(loading.lines[loading.selectedLine]!, /▌ #9 Layout/);
   state.github = { kind: "stale", previous, reason: "Offline" };
-  assert.match(detailLines(state, 0).lines.join("\n"), /Stale · Offline.*2 open issues.*\(previous\)/s);
+  assert.match(detailLines(state, 0).lines.join("\n"), /Stale · Offline.*Issues 2 open \(previous\)/s);
   state.github = { kind: "unavailable", reason: "Not configured" };
   assert.match(detailLines(state, -1).lines.join("\n"), /Unavailable · Not configured/);
   assert.match(detailLines(undefined, -1).lines[0]!, /No projects configured/);
@@ -79,7 +79,7 @@ test("t routes to terminal and o is no longer an action key", async () => {
     assert.equal(isProjectActionKey("t"), true);
     assert.equal(isProjectActionKey("o"), false);
     const hints = detailLines(state, -1, 80).lines.join("\n");
-    assert.match(hints, /t terminal/);
+    assert.match(hints, /\[t\] terminal/);
     assert.doesNotMatch(hints, /o terminal/);
     const result = projectActionForKey("t", actions, state, -1);
     await result.action;
@@ -130,7 +130,7 @@ test("twelve project viewport retains selected row across navigation and resizin
   const states = Array.from({ length: 12 }, (_, index) => projectState(index));
   for (const [width, height] of [[120, 24], [40, 15], [30, 9], [88, 8]]) {
     const layout = dashboardLayout(width!, height!, states.length);
-    const rows = layout.navigatorHeight - navigatorHeadingHeight(layout.wide, layout.navigatorHeight);
+    const rows = layout.navigatorHeight - navigatorHeadingHeight(layout.wide, layout.navigatorHeight) - layout.radarHeight;
     for (let selected = 0; selected < states.length; selected++) {
       const view = navigatorView(states, selected, rows, layout.navigatorWidth, "unicode-wide");
       assert.ok(view.start <= selected && selected < view.start + view.capacity);
@@ -174,9 +174,67 @@ test("navigator heading keeps project count at the right edge", () => {
   assert.equal(measureEditText(heading, { widthMethod: "unicode-wide" }), 42);
   assert.equal(navigatorHeadingText(1, 42).trimEnd().endsWith("1 project"), true);
   assert.equal(navigatorHeadingText(20, 8), "PROJECTS");
-  assert.equal(navigatorHeadingHeight(true, 17), 2);
+  assert.equal(navigatorHeadingHeight(true, 17), 1);
   assert.equal(navigatorHeadingHeight(true, 5), 1);
   assert.equal(navigatorHeadingHeight(false, 17), 0);
+});
+
+test("radar uses only loaded Git states and keeps unknown states distinct", () => {
+  assert.equal(radarSummary([]), "No projects configured");
+  assert.equal(radarSummary([projectState(0)]), "1 clean");
+  const states = Array.from({ length: 5 }, (_, index) => projectState(index));
+  states[2]!.git = { kind: "loading" };
+  states[3]!.git = { kind: "stale", previous: states[0]!.git as Extract<ProjectState["git"], { kind: "available" }>, reason: "Offline" };
+  states[4]!.git = { kind: "unavailable", reason: "Missing" };
+  assert.equal(radarSummary(states), "1 dirty · 1 unavailable · 1 clean · 1 loading · 1 stale");
+  assert.equal(radarSummary(states.slice(2)), "1 unavailable · 1 loading · 1 stale");
+});
+
+test("wide radar reserves a bottom summary and keeps its counts within the panel", () => {
+  const states = [projectState(0), projectState(1)];
+  states[1]!.git = { kind: "unavailable", reason: "Missing" };
+  const layout = dashboardLayout(120, 32, states.length);
+  assert.equal(layout.radarHeight, 3);
+  assert.ok(layout.navigatorHeight - navigatorHeadingHeight(layout.wide, layout.navigatorHeight) - layout.radarHeight >= 1);
+  const content = radarContent(states, layout.navigatorWidth, "unicode-wide");
+  assert.match(content.chunks.map(chunk => chunk.text).join(""), /GIT STATUS · LOADED.*1 unavailable.*1 clean/s);
+  assert.ok(content.chunks.some(chunk => chunk.text.includes("unavailable") && chunk.fg?.toInts().slice(0, 3).join() === "185,199,217"));
+  assert.equal(dashboardLayout(42, 18, 2).radarHeight, 0);
+});
+
+test("middle branch clipping retains its prefix and final identifier", () => {
+  const branch = "feature/navigation/issue-23";
+  const clipped = fitBranch(branch, 17, "unicode-wide");
+  assert.match(clipped, /^feature.*….*-23$/);
+  assert.equal(measureEditText(clipped, { widthMethod: "unicode-wide" }), 17);
+  assert.equal(fitBranch(branch, 5, "unicode-wide"), "feat…");
+  const state = projectState(0);
+  state.git = { ...state.git as Extract<ProjectState["git"], { kind: "available" }>, branch };
+  const entry = navigatorEntry(state, 30, true, "unicode-wide");
+  assert.match(entry.metadataLine, /⎇ feature.*….*-23.*clean$/);
+});
+
+test("five target terminal sizes retain selected entry, bounded text and workbench hierarchy", () => {
+  const states = Array.from({ length: 18 }, (_, index) => projectState(index));
+  states[17]!.project.nextAction = "Review the current change";
+  for (const [width, height] of [[120, 32], [100, 25], [80, 24], [56, 22], [42, 18]]) {
+    const layout = dashboardLayout(width!, height!, states.length);
+    const headingRows = navigatorHeadingHeight(layout.wide, layout.navigatorHeight);
+    const rows = layout.navigatorHeight - headingRows - layout.radarHeight;
+    const view = navigatorView(states, 17, rows, layout.navigatorWidth, "unicode-wide");
+    assert.ok(view.start <= 17 && 17 < view.start + view.capacity);
+    assert.equal(view.entries.filter(entry => entry.selected).length, 1);
+    assert.ok(view.entries.every(entry => "nameLine" in entry
+      ? measureEditText(entry.nameLine, { widthMethod: "unicode-wide" }) === layout.navigatorWidth && measureEditText(entry.metadataLine, { widthMethod: "unicode-wide" }) === layout.navigatorWidth
+      : measureEditText(entry.text, { widthMethod: "unicode-wide" }) <= layout.navigatorWidth));
+    const detail = detailLines(states[17], -1, layout.detailWidth, "unicode-wide");
+    assert.equal(detail.rows[0]!.tone, "title");
+    assert.ok(detail.rows.findIndex(row => row.text.includes("NEXT ACTION")) < detail.rows.findIndex(row => row.text.includes("LOCAL GIT")));
+    assert.ok(detail.rows.findIndex(row => row.text.includes("LOCAL GIT")) < detail.rows.findIndex(row => row.text.includes("GITHUB")));
+    assert.ok(detail.rows.some(row => row.surface === "alt" && row.spans?.some(span => span.tone === "action" && span.text.includes("Review the current change"))));
+    assert.ok(detail.lines.map(line => fitLine(line, layout.detailWidth, "unicode-wide")).every(line => measureEditText(line, { widthMethod: "unicode-wide" }) <= layout.detailWidth));
+    assert.ok(layout.detailHeight > 0);
+  }
 });
 
 test("viewport keeps complete two-line entries and uses single-line fallback for short windows", () => {
@@ -205,7 +263,7 @@ test("selected project highlight covers both lines and stops before the next ent
 });
 
 test("semantic overrides reach navigator selection, statuses and detail feedback", () => {
-  const theme = resolveTheme("wolfy-dark", { selectionBackground: "#405060", success: "#AABBCC", error: "#DDEEFF", heading: "#ABCDEF" });
+  const theme = resolveTheme("wolfy-dark", { selectionBackground: "#405060", success: "#AABBCC", error: "#DDEEFF", heading: "#ABCDEF", divider: "#445566", panelAlt: "#223344" });
   const view = navigatorView([projectState(0), projectState(2)], 1, 4, 32, "unicode-wide");
   const content = navigatorContent(view, 32, "unicode-wide", "PROJECTS", 0, theme);
   assert.ok(content.chunks.some(chunk => chunk.bg?.toInts().slice(0, 3).join() === "64,80,96"));
@@ -216,13 +274,17 @@ test("semantic overrides reach navigator selection, statuses and detail feedback
   assert.equal(detailToneColor("unavailable", theme), theme.unavailable);
   assert.equal(detailToneColor("accent", theme), theme.accent);
   assert.equal(detailToneColor("accentSubtle", theme), theme.accentSubtle);
+  assert.equal(detailToneColor("divider", theme), theme.divider);
+  assert.equal(detailToneColor("action", theme), theme.textPrimary);
   assert.equal(feedbackColor("error", theme), theme.error);
   assert.equal(feedbackColor("loading", theme), theme.info);
   const dirty = projectState(1);
   const detail = detailLines(dirty, -1);
-  assert.ok(detail.rows.some(row => row.tone === "warn" && row.text.includes("Dirty")));
+  assert.ok(detail.rows[0]!.spans?.some(span => span.tone === "title" && span.strong));
+  assert.ok(detail.rows.some(row => row.surface === "alt" && row.spans?.some(span => span.tone === "divider")));
+  assert.ok(detail.rows.some(row => row.text.includes("Dirty") && row.spans?.some(span => span.tone === "warn")));
   dirty.project.nextAction = "Review PR";
-  assert.ok(detailLines(dirty, -1).rows.some(row => row.tone === "accent" && row.text.includes("Review PR")));
+  assert.ok(detailLines(dirty, -1).rows.some(row => row.spans?.some(span => span.tone === "action" && span.text.includes("Review PR"))));
 });
 
 test("long Unicode names clip safely in narrow navigator rows", () => {
@@ -271,12 +333,28 @@ test("detail hierarchy preserves manual action and separates local and remote st
   state.git = { kind: "available", branch: "feature/details", detached: false, staged: true, unstaged: false, untracked: true, clean: false };
   state.github = { kind: "unavailable", reason: "Offline" };
   const view = detailLines(state, -1, 48, "unicode-wide");
-  assert.deepEqual(view.lines.filter(line => /NEXT ACTION|LOCAL GIT|GITHUB/.test(line)).map(line => line.trim()), ["NEXT ACTION", "LOCAL GIT", "GITHUB"]);
-  assert.ok(view.lines.includes("    Review  界界  this exact task"));
-  assert.match(view.lines.join("\n"), /Branch feature\/details  ·  Dirty.*staged · untracked.*GITHUB.*Unavailable · Offline/s);
+  assert.deepEqual(view.lines.filter(line => /NEXT ACTION|LOCAL GIT|GITHUB/.test(line)).map(line => line.includes("NEXT ACTION") ? "NEXT ACTION" : line.trim()), ["NEXT ACTION", "LOCAL GIT", "GITHUB"]);
+  assert.ok(view.lines.some(line => line.includes("Review  界界  this exact task")));
+  assert.match(view.lines.join("\n"), /Branch feature\/details.*● Dirty.*staged · untracked.*GITHUB.*Unavailable · Offline/s);
   assert.ok(view.rows.some(row => row.tone === "unavailable"));
   state.git = { kind: "available", branch: "abc123", detached: true, staged: false, unstaged: false, untracked: false, clean: true };
-  assert.match(detailLines(state, -1).lines.join("\n"), /Detached HEAD  ·  Clean/);
+  assert.match(detailLines(state, -1).lines.join("\n"), /Detached HEAD.*● Clean/s);
+});
+
+test("wide workbench pairs local and GitHub zones with bounded rows", () => {
+  const state = projectState(0);
+  state.project.nextAction = "Review the current task";
+  state.github = { kind: "available", issues: 2, pullRequests: [] };
+  const detail = detailLines(state, -1, 77, "unicode-wide", true);
+  assert.ok(detail.lines.some(line => line.includes("LOCAL GIT") && line.includes("GITHUB")));
+  assert.ok(detail.lines.some(line => line.includes("Branch feature/nav") && line.includes("Available")));
+  assert.ok(detail.lines.some(line => line.includes("● Clean") && line.includes("Issues 2 open")));
+  assert.ok(detail.lines.every(line => measureEditText(line, { widthMethod: "unicode-wide" }) <= 77));
+  assert.ok(detail.rows.some(row => row.spans?.some(span => span.tone === "good")));
+  const compact = detailLines(state, -1, 42, "unicode-wide", false);
+  assert.ok(compact.lines.findIndex(line => line.includes("LOCAL GIT")) < compact.lines.findIndex(line => line.includes("GITHUB")));
+  state.project.name = "A very long project identity with 界界 and a final identifier";
+  assert.ok(measureEditText(detailLines(state, -1, 42, "unicode-wide").lines[0]!, { widthMethod: "unicode-wide" }) <= 42);
 });
 
 test("long Unicode detail and PR entries wrap within compact width", () => {
