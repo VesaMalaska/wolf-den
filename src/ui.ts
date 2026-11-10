@@ -1,6 +1,6 @@
 import { BoxRenderable, TextRenderable, StyledText, bg, bold, fg, createCliRenderer, measureEditText, type KeyEvent, type WidthMethod } from "@opentui/core";
 import { ProjectActions } from "./actions.js";
-import type { ProjectState } from "./domain.js";
+import type { GithubPullRequest, ProjectState } from "./domain.js";
 import { GithubRefresh, loadProjectStates } from "./projects.js";
 import { loadConfiguration, RegistryError } from "./registry.js";
 import { resolveTheme, type SemanticTheme } from "./theme.js";
@@ -224,6 +224,7 @@ export function dashboardLayout(width: number, height: number, projectCount: num
 type DetailTone = "heading" | "divider" | "accent" | "accentSubtle" | "action" | "title" | "muted" | "normal" | "good" | "warn" | "error" | "unavailable" | "selected";
 type DetailSpan = { text: string; tone: DetailTone; strong?: boolean };
 type DetailRow = { text: string; tone: DetailTone; spans?: DetailSpan[]; surface?: "alt" };
+type DetailView = { lines: string[]; rows: DetailRow[]; selectedLine: number; selectedContextStart?: number };
 
 function boxEdge(label: string, width: number, bottom = false, widthMethod: WidthMethod = "unicode"): string {
   if (width < 4) return fitLine(label, width, widthMethod);
@@ -273,7 +274,15 @@ function wrapped(value: string, width: number, widthMethod: WidthMethod): string
   return lines;
 }
 
-export function detailLines(state: ProjectState | undefined, selectedPr: number, width = 80, widthMethod: WidthMethod = "unicode", wide = false): { lines: string[]; rows: DetailRow[]; selectedLine: number } {
+function prRow(pr: GithubPullRequest, selected: boolean, width: number, widthMethod: WidthMethod): string {
+  const available = Math.max(0, width - (width >= 50 ? 4 : 0));
+  const prefix = `${selected ? "  ▌" : "   "} #${pr.number} ${pr.draft ? "[draft]" : "[open]"} `;
+  const title = fitLine(pr.title, Math.max(0, available - measureEditText(prefix, { widthMethod })), widthMethod);
+  const content = fitLine(prefix + title, available, widthMethod);
+  return width >= 50 ? boxBody(content, width, widthMethod) : content;
+}
+
+export function detailLines(state: ProjectState | undefined, selectedPr: number, width = 80, widthMethod: WidthMethod = "unicode", wide = false): DetailView {
   const rows: DetailRow[] = [];
   const add = (text: string, tone: DetailTone = "normal", surface?: "alt") => rows.push({ text, tone, surface });
   const addSpans = (spans: DetailSpan[], tone: DetailTone = "normal", surface?: "alt") => rows.push({ text: spans.map(span => span.text).join(""), tone, spans, surface });
@@ -330,28 +339,53 @@ export function detailLines(state: ProjectState | undefined, selectedPr: number,
     }
   }
   let selectedLine = 0;
+  let selectedContextStart: number | undefined;
   if (data?.pullRequests.length) {
     add("", "muted");
     if (width >= 50) addSpans(boxTopSpans(`PULL REQUESTS (${data.pullRequests.length})`, width, widthMethod));
     else add(`  PULL REQUESTS (${data.pullRequests.length})`, "heading");
     data.pullRequests.forEach((pr, index) => {
-      if (index > 0) add(width >= 50 ? boxBody("─".repeat(Math.max(0, width - 4)), width, widthMethod) : "", "muted");
       if (index === selectedPr) selectedLine = rows.length;
-      const prefix = `${index === selectedPr ? "  ▌" : "   "} #${pr.number} `;
-      const suffix = pr.draft ? " [draft]" : "";
-      const titleWidth = Math.max(1, width - measureEditText(prefix + suffix, { widthMethod }) - (width >= 50 ? 4 : 0));
-      const titleLines = wrapped(pr.title, titleWidth, widthMethod);
-      titleLines.forEach((line, lineIndex) => {
-        const text = `${lineIndex === 0 ? prefix : "      "}${line}${lineIndex === 0 ? suffix : ""}`;
-        add(width >= 50 ? boxBody(text, width, widthMethod) : text, index === selectedPr ? "selected" : "normal");
-      });
-      const metadata = `      Review ${safeText(pr.review ?? "unavailable")}  ·  Checks ${safeText(pr.checks ?? "unavailable")}`;
-      add(width >= 50 ? boxBody(metadata, width, widthMethod) : metadata, "muted");
+      add(prRow(pr, index === selectedPr, width, widthMethod), index === selectedPr ? "selected" : "normal");
     });
     if (width >= 50) add(boxEdge("", width, true, widthMethod), "divider");
+    const chosen = data.pullRequests[selectedPr];
+    if (chosen) {
+      selectedContextStart = rows.length;
+      const previous = remote.kind !== "available" ? " · previous data" : "";
+      add(fitLine(`  SELECTED PR #${chosen.number} · ${chosen.draft ? "draft" : "open"}${previous}`, width, widthMethod), "heading", "alt");
+      add(fitLine(`  Review ${safeText(chosen.review ?? "unavailable")}`, width, widthMethod), chosen.review ? "normal" : "unavailable", "alt");
+      add(fitLine(`  Checks ${safeText(chosen.checks ?? "unavailable")}`, width, widthMethod), chosen.checks ? "normal" : "unavailable", "alt");
+    }
   }
-  if (width >= 38) { add("", "muted"); add("  QUICK ACTIONS", "heading"); add("  [f] files  [e] editor  [t] terminal  [g] repo  [p] PR", "muted"); }
-  return { lines: rows.map(row => row.text), rows, selectedLine };
+  return { lines: rows.map(row => row.text), rows, selectedLine, selectedContextStart };
+}
+
+export function detailViewport(view: DetailView, offset: number, height: number): { rows: DetailRow[]; offset: number; scrollHeight: number } {
+  const context = view.selectedContextStart === undefined ? [] : view.rows.slice(view.selectedContextStart);
+  const pinned = context.length && height >= 4 ? context : [];
+  const scrollHeight = Math.max(0, height - pinned.length);
+  const main = pinned.length ? view.rows.slice(0, view.selectedContextStart) : view.rows;
+  const start = Math.max(0, Math.min(offset, Math.max(0, main.length - scrollHeight)));
+  return { rows: [...main.slice(start, start + scrollHeight), ...pinned], offset: start, scrollHeight };
+}
+
+export function shortcutFooter(width: number, help: boolean, state: ProjectState | undefined, selectedPr: number, widthMethod: WidthMethod = "unicode"): string {
+  const available = state?.github.kind === "available" ? state.github : undefined;
+  const hasPrs = !!available?.pullRequests.length;
+  const selected = !!available && selectedPr >= 0 && selectedPr < available.pullRequests.length;
+  const hints = help ? ["? close help", "q quit", "PgUp/PgDn scroll", "↑/↓ project"]
+    : !state ? ["? help", "q quit"]
+    : selected ? ["? help", "q quit", "p open PR", "Tab next PR", "↑/↓ project", "PgUp/PgDn scroll", "f files", "e editor", "t terminal", "g repo", "r refresh"]
+      : ["? help", "q quit", "↑/↓ project", ...(hasPrs ? ["Tab select PR"] : []), "f files", "e editor", "t terminal", ...(state?.project.repository ? ["g repo", "r refresh"] : []), "PgUp/PgDn scroll"];
+  const measure = (value: string) => measureEditText(value, { widthMethod });
+  if (width < measure("? help · q quit")) return width >= measure("? q") ? "? q" : fitLine("?", width, widthMethod);
+  const shown: string[] = [];
+  for (const hint of hints) {
+    const candidate = [...shown, hint].join(" · ");
+    if (measure(candidate) <= width) shown.push(hint);
+  }
+  return shown.join(" · ");
 }
 
 export function scrollToLine(offset: number, line: number, height: number): number {
@@ -384,6 +418,10 @@ export function moveProjectSelection(selected: number, selectedPr: number, count
   return { selected: next, selectedPr: next === selected ? selectedPr : -1 };
 }
 
+export function nextPrSelection(selectedPr: number, count: number): number {
+  return count > 0 ? (selectedPr + 1) % count : -1;
+}
+
 export function projectLoadNotice(phase: "registry" | "loading" | "ready", count = 0): string {
   if (phase === "registry") return "Loading project registry…";
   if (count === 0) return "No projects configured.";
@@ -405,7 +443,7 @@ export function projectActionForKey(key: ProjectActionKey, actions: ProjectActio
     case "g": return { action: actions.repository(project), launched: "Repository opener" };
     case "p": {
       const pr = state.github.kind === "available" ? state.github.pullRequests[selectedPr] : undefined;
-      return { action: pr ? actions.pullRequest(project, pr) : Promise.reject(new Error("Select an available PR with Tab first.")), launched: `PR #${pr?.number} opener` };
+      return { action: pr ? actions.pullRequest(project, pr) : Promise.reject(new Error("Select an available PR with Tab first.")), launched: pr ? `PR #${pr.number} opener` : "PR opener" };
     }
   }
 }
@@ -474,9 +512,10 @@ export async function runDashboard(): Promise<void> {
     const view = showingHelp
       ? { lines: ["Keyboard shortcuts", "↑/↓  Select project", "Tab  Select next PR", "e  Open project in VS Code", "t  Open terminal in project", "f  Open project in file manager", "g  Open GitHub repository", "p  Open selected PR", "r  Refresh selected project's GitHub data", "PgUp/PgDn  Scroll details", "?  Close help", "q / Esc / Ctrl+C  Quit"], selectedLine: 0 }
       : registryLoaded ? detailLines(states[selected], selectedPr, dimensions.detailWidth, renderer.widthMethod, dimensions.wide) : { lines: [feedback.text], selectedLine: 0 };
-    detailOffset = Math.min(detailOffset, Math.max(0, view.lines.length - dimensions.detailHeight));
-    detail.content = "rows" in view && view.rows
-      ? new StyledText(view.rows.slice(detailOffset, detailOffset + dimensions.detailHeight).flatMap((row, index, visible) => {
+    const visible = "rows" in view && view.rows ? detailViewport(view, detailOffset, dimensions.detailHeight) : undefined;
+    detailOffset = visible?.offset ?? Math.min(detailOffset, Math.max(0, view.lines.length - dimensions.detailHeight));
+    detail.content = visible
+      ? new StyledText(visible.rows.flatMap((row, index, shownRows) => {
           const line = fitLine(row.text, dimensions.detailWidth, renderer.widthMethod);
           const styled = row.spans ? row.spans.map(span => {
             const content = span.strong ? bold(span.text) : span.text;
@@ -487,17 +526,14 @@ export async function runDashboard(): Promise<void> {
               : row.surface === "alt" ? bg(theme.panelAlt)(content) : content;
             return [fg(detailToneColor(row.tone, theme))(surface)];
           })();
-          return index === visible.length - 1 ? styled : [...styled, fg(theme.textMuted)("\n")];
+          return index === shownRows.length - 1 ? styled : [...styled, fg(theme.textMuted)("\n")];
         }))
       : view.lines.slice(detailOffset, detailOffset + dimensions.detailHeight).map(line => fitLine(line, dimensions.detailWidth, renderer.widthMethod)).join("\n");
     const shown = feedbackForSelection(feedback, states[selected]?.project.id);
     const labels = { loading: "…", success: "✓", error: "!", unavailable: "!", info: "·" };
     message.fg = feedbackColor(shown.kind, theme);
     message.content = fitLine(`${labels[shown.kind]} ${shown.text}`, dimensions.columns, renderer.widthMethod);
-    const shortcuts = dimensions.columns < 18 ? "? q" : dimensions.columns < 45
-      ? "? help · q quit · ↑/↓ project · Tab PR"
-      : "? help · q quit · ↑/↓ project · f files · e editor · t terminal · Tab PR · PgUp/PgDn scroll · g repo · p PR · r refresh";
-    footer.content = fitLine(shortcuts, dimensions.columns, renderer.widthMethod);
+    footer.content = shortcutFooter(dimensions.columns, showingHelp, states[selected], selectedPr, renderer.widthMethod);
   };
   const onKey = (key: KeyEvent) => {
     if (key.name === "q" || key.name === "escape") { renderer.destroy(); return; }
@@ -508,9 +544,11 @@ export async function runDashboard(): Promise<void> {
     if (key.name === "tab") {
       const data = state?.github.kind === "available" ? state.github : undefined;
       if (!data?.pullRequests.length) { feedback = { kind: "unavailable", text: "No available PRs to select for this project.", projectId: state?.project.id }; render(); return; }
-      selectedPr = (selectedPr + 1) % data.pullRequests.length;
+      selectedPr = nextPrSelection(selectedPr, data.pullRequests.length);
       const dimensions = dashboardLayout(renderer.terminalWidth, renderer.terminalHeight, states.length);
-      detailOffset = scrollToLine(detailOffset, detailLines(state, selectedPr, dimensions.detailWidth, renderer.widthMethod, dimensions.wide).selectedLine, dimensions.detailHeight);
+      const selectedView = detailLines(state, selectedPr, dimensions.detailWidth, renderer.widthMethod, dimensions.wide);
+      const scrollHeight = detailViewport(selectedView, detailOffset, dimensions.detailHeight).scrollHeight;
+      detailOffset = scrollToLine(detailOffset, selectedView.selectedLine, scrollHeight);
       feedback = { kind: "info", text: `Selected PR #${data.pullRequests[selectedPr]!.number}.`, projectId: state!.project.id };
       render(); return;
     }

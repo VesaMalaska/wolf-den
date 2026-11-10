@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { measureEditText } from "@opentui/core";
 import { ProjectActions } from "../src/actions.js";
-import { clampSelection, dashboardLayout, detailLines, detailToneColor, feedbackColor, feedbackForSelection, fitBranch, fitLine, isProjectActionKey, moveProjectSelection, moveSelection, navigatorContent, navigatorEntry, navigatorHeadingHeight, navigatorHeadingText, navigatorRow, navigatorView, projectActionForKey, projectLoadNotice, radarContent, radarSummary, scrollToLine, visibleWindow } from "../src/ui.js";
+import { clampSelection, dashboardLayout, detailLines, detailToneColor, detailViewport, feedbackColor, feedbackForSelection, fitBranch, fitLine, isProjectActionKey, moveProjectSelection, moveSelection, navigatorContent, navigatorEntry, navigatorHeadingHeight, navigatorHeadingText, navigatorRow, navigatorView, nextPrSelection, projectActionForKey, projectLoadNotice, radarContent, radarSummary, scrollToLine, shortcutFooter, visibleWindow } from "../src/ui.js";
 import { resolveTheme } from "../src/theme.js";
 import type { ProjectState } from "../src/domain.js";
 
@@ -51,7 +51,8 @@ test("selected PR stays in details while loading and stale remote state remains 
   };
   const loading = detailLines(state, 0);
   assert.match(loading.lines.join("\n"), /Loading · previous data below/);
-  assert.match(loading.lines[loading.selectedLine]!, /▌ #9 Layout/);
+  assert.match(loading.lines[loading.selectedLine]!, /▌ #9 \[open\] Layout/);
+  assert.match(loading.lines.join("\n"), /SELECTED PR #9 · open · previous data/);
   state.github = { kind: "stale", previous, reason: "Offline" };
   assert.match(detailLines(state, 0).lines.join("\n"), /Stale · Offline.*Issues 2 open \(previous\)/s);
   state.github = { kind: "unavailable", reason: "Not configured" };
@@ -78,8 +79,8 @@ test("t routes to terminal and o is no longer an action key", async () => {
     };
     assert.equal(isProjectActionKey("t"), true);
     assert.equal(isProjectActionKey("o"), false);
-    const hints = detailLines(state, -1, 80).lines.join("\n");
-    assert.match(hints, /\[t\] terminal/);
+    const hints = shortcutFooter(80, false, state, -1);
+    assert.match(hints, /t terminal/);
     assert.doesNotMatch(hints, /o terminal/);
     const result = projectActionForKey("t", actions, state, -1);
     await result.action;
@@ -98,6 +99,31 @@ test("navigation clamps to the available project range", () => {
   assert.deepEqual(moveProjectSelection(1, 2, 3, "down"), { selected: 2, selectedPr: -1 });
   assert.deepEqual(moveProjectSelection(2, 2, 3, "down"), { selected: 2, selectedPr: 2 });
   assert.deepEqual(moveProjectSelection(0, -1, 0, "down"), { selected: 0, selectedPr: -1 });
+});
+
+test("PR selection starts at the first entry, cycles, and handles zero or one PR", () => {
+  assert.equal(nextPrSelection(-1, 3), 0);
+  assert.equal(nextPrSelection(0, 3), 1);
+  assert.equal(nextPrSelection(2, 3), 0);
+  assert.equal(nextPrSelection(-1, 1), 0);
+  assert.equal(nextPrSelection(0, 1), 0);
+  assert.equal(nextPrSelection(-1, 0), -1);
+});
+
+test("p requires a selected live PR and never substitutes a cached URL", async () => {
+  const state = projectState(0);
+  state.project.repository = "example/repo";
+  const pr = { number: 7, title: "Selected", url: "https://github.com/example/repo/pull/7", review: null, checks: null, draft: false };
+  state.github = { kind: "available", issues: 0, pullRequests: [pr] };
+  const opened: string[] = [];
+  const actions = new ProjectActions(async (_executable, args) => { opened.push(args[0]!); }, { DISPLAY: ":0" });
+  await assert.rejects(projectActionForKey("p", actions, state, -1).action, /Select an available PR/);
+  assert.deepEqual(opened, []);
+  await projectActionForKey("p", actions, state, 0).action;
+  assert.deepEqual(opened, [pr.url]);
+  state.github = { kind: "stale", previous: { kind: "available", issues: 0, pullRequests: [pr] }, reason: "Offline" };
+  await assert.rejects(projectActionForKey("p", actions, state, 0).action, /Select an available PR/);
+  assert.deepEqual(opened, [pr.url]);
 });
 
 function projectState(index: number): ProjectState {
@@ -357,21 +383,89 @@ test("wide workbench pairs local and GitHub zones with bounded rows", () => {
   assert.ok(measureEditText(detailLines(state, -1, 42, "unicode-wide").lines[0]!, { widthMethod: "unicode-wide" }) <= 42);
 });
 
-test("long Unicode detail and PR entries wrap within compact width", () => {
+test("compact PR rows and pinned selected details stay bounded at target sizes", () => {
   const state = projectState(11);
   state.project.nextAction = "Open the very long task with 界界 and 👩‍💻 today";
   state.github = { kind: "available", issues: 4, pullRequests: Array.from({ length: 12 }, (_, index) => ({
     number: index + 1, title: `Long pull request title ${index} 界界 👩‍💻 with more words`, url: `https://github.com/example/pull/${index + 1}`,
     review: "Changes requested", checks: "Pending", draft: index === 11,
   })) };
-  for (const width of [24, 40, 60]) {
-    const view = detailLines(state, 11, width, "unicode-wide");
-    assert.ok(view.lines.every(line => measureEditText(fitLine(line, width, "unicode-wide"), { widthMethod: "unicode-wide" }) <= width));
-    assert.match(view.lines[view.selectedLine]!, /▌ #12/);
-    assert.match(view.lines.join("\n"), /Review Changes requested  ·  Checks Pending/);
-    assert.equal(scrollToLine(0, view.selectedLine, 5), view.selectedLine - 4);
-    assert.equal(scrollToLine(view.selectedLine - 4, view.selectedLine, 5), view.selectedLine - 4);
+  for (const [width, height] of [[120, 32], [100, 25], [80, 24], [56, 22], [42, 18]]) {
+    const layout = dashboardLayout(width!, height!, 1);
+    const view = detailLines(state, 11, layout.detailWidth, "unicode-wide", layout.wide);
+    assert.ok(view.lines.every(line => measureEditText(fitLine(line, layout.detailWidth, "unicode-wide"), { widthMethod: "unicode-wide" }) <= layout.detailWidth));
+    assert.match(view.lines[view.selectedLine]!, /▌ #12 \[draft\]/);
+    assert.equal(view.lines.filter(line => /Review Changes requested/.test(line)).length, 1);
+    const capacity = detailViewport(view, 0, layout.detailHeight).scrollHeight;
+    const offset = scrollToLine(0, view.selectedLine, capacity);
+    const visible = detailViewport(view, offset, layout.detailHeight).rows.map(row => row.text);
+    assert.ok(visible.some(line => /▌ #12 \[draft\]/.test(line)));
+    assert.ok(visible.some(line => /SELECTED PR #12 · draft/.test(line)));
+    assert.ok(visible.some(line => /Checks Pending/.test(line)));
+    assert.ok(visible.every(line => measureEditText(line, { widthMethod: "unicode-wide" }) <= layout.detailWidth));
   }
+});
+
+test("PR list shows one row per PR and distinguishes open, draft, no checks and unavailable details", () => {
+  const state = projectState(0);
+  state.github = { kind: "available", issues: 1, pullRequests: [
+    { number: 1, title: "Open  PR", url: "https://github.com/example/pull/1", review: null, checks: "no checks", draft: false },
+    { number: 2, title: "Draft 界界 👩‍💻 e\u0301", url: "https://github.com/example/pull/2", review: "REVIEW_REQUIRED", checks: null, draft: true },
+  ] };
+  const open = detailLines(state, 0, 42, "unicode-wide");
+  assert.match(open.lines.join("\n"), /#1 \[open\] Open  PR.*#2 \[draft\] Draft 界界 👩‍💻 e\u0301/s);
+  assert.match(open.lines.join("\n"), /SELECTED PR #1 · open.*Review unavailable.*Checks no checks/s);
+  assert.equal(open.lines.filter(line => /Review /.test(line)).length, 1);
+  const draft = detailLines(state, 1, 42, "unicode-wide");
+  assert.match(draft.lines.join("\n"), /SELECTED PR #2 · draft.*Review REVIEW_REQUIRED.*Checks unavailable/s);
+  const tiny = detailViewport(draft, draft.selectedContextStart!, 2);
+  assert.equal(tiny.scrollHeight, 2);
+  assert.ok(tiny.rows.some(row => row.text.includes("SELECTED PR #2")));
+  assert.ok(detailViewport(draft, draft.selectedContextStart! + 1, 2).rows.some(row => row.text.includes("Checks unavailable")));
+  assert.equal(detailLines(state, -1, 42).selectedContextStart, undefined);
+  state.github = { kind: "available", issues: 1, pullRequests: [] };
+  assert.doesNotMatch(detailLines(state, -1, 42).lines.join("\n"), /SELECTED PR|PULL REQUESTS/);
+});
+
+test("PR title clipping preserves graphemes and markers without overflow", () => {
+  const state = projectState(0);
+  state.github = { kind: "available", issues: 0, pullRequests: [
+    { number: 123, title: "Supercalifragilistic 界界 👩‍💻 e\u0301 end", url: "https://github.com/example/pull/123", review: null, checks: null, draft: true },
+  ] };
+  for (const width of [24, 42, 56, 80]) {
+    const view = detailLines(state, 0, width, "unicode-wide");
+    const row = view.lines[view.selectedLine]!;
+    assert.match(row, /#123 \[draft\]/);
+    assert.ok(measureEditText(row, { widthMethod: "unicode-wide" }) <= width);
+    assert.equal(view.lines.filter(line => line.includes("#123 [draft]")).length, 1);
+  }
+});
+
+test("footer uses complete relevant hints at each target width", () => {
+  const state = projectState(0);
+  state.project.repository = "example/repo";
+  state.github = { kind: "available", issues: 0, pullRequests: [
+    { number: 1, title: "A", url: "https://github.com/example/repo/pull/1", review: null, checks: null, draft: false },
+  ] };
+  for (const width of [120, 100, 80, 56, 42]) {
+    const normal = shortcutFooter(width, false, state, -1, "unicode-wide");
+    const selected = shortcutFooter(width, false, state, 0, "unicode-wide");
+    const help = shortcutFooter(width, true, state, 0, "unicode-wide");
+    for (const line of [normal, selected, help]) {
+      assert.ok(measureEditText(line, { widthMethod: "unicode-wide" }) <= width);
+      assert.match(line, /q quit/);
+      assert.match(line, /\? (help|close help)/);
+      assert.doesNotMatch(line, /…/);
+    }
+    assert.match(selected, /p open PR/);
+    assert.doesNotMatch(normal, /p open PR/);
+  }
+  state.github = { kind: "available", issues: 0, pullRequests: [] };
+  assert.doesNotMatch(shortcutFooter(120, false, state, -1), /PR/);
+  state.github = { kind: "stale", previous: { kind: "available", issues: 0, pullRequests: [{ number: 1, title: "A", url: "https://github.com/example/repo/pull/1", review: null, checks: null, draft: false }] }, reason: "Offline" };
+  assert.doesNotMatch(shortcutFooter(120, false, state, 0), /p open PR|Tab select PR/);
+  assert.equal(shortcutFooter(3, false, state, -1), "? q");
+  assert.equal(shortcutFooter(120, false, undefined, -1), "? help · q quit");
 });
 
 test("delayed feedback is attributed to its project", () => {
