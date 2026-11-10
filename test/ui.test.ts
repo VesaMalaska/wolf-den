@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { measureEditText } from "@opentui/core";
 import { ProjectActions } from "../src/actions.js";
-import { clampSelection, dashboardLayout, detailLines, detailToneColor, feedbackColor, feedbackForSelection, fitLine, isProjectActionKey, moveProjectSelection, moveSelection, navigatorContent, navigatorEntry, navigatorHeadingHeight, navigatorHeadingText, navigatorRow, navigatorView, projectActionForKey, projectLoadNotice, scrollToLine, visibleWindow } from "../src/ui.js";
+import { clampSelection, dashboardLayout, detailLines, detailToneColor, feedbackColor, feedbackForSelection, fitBranch, fitLine, isProjectActionKey, moveProjectSelection, moveSelection, navigatorContent, navigatorEntry, navigatorHeadingHeight, navigatorHeadingText, navigatorRow, navigatorView, projectActionForKey, projectLoadNotice, radarSummary, scrollToLine, visibleWindow } from "../src/ui.js";
 import { resolveTheme } from "../src/theme.js";
 import type { ProjectState } from "../src/domain.js";
 
@@ -179,6 +179,52 @@ test("navigator heading keeps project count at the right edge", () => {
   assert.equal(navigatorHeadingHeight(false, 17), 0);
 });
 
+test("radar uses only loaded Git states and keeps unknown states distinct", () => {
+  assert.equal(radarSummary([]), "No projects configured");
+  assert.equal(radarSummary([projectState(0)]), "1 clean");
+  const states = Array.from({ length: 5 }, (_, index) => projectState(index));
+  states[2]!.git = { kind: "loading" };
+  states[3]!.git = { kind: "stale", previous: states[0]!.git as Extract<ProjectState["git"], { kind: "available" }>, reason: "Offline" };
+  states[4]!.git = { kind: "unavailable", reason: "Missing" };
+  assert.equal(radarSummary(states), "1 dirty · 1 unavailable · 1 clean · 1 loading · 1 stale");
+  assert.equal(radarSummary(states.slice(2)), "1 unavailable · 1 loading · 1 stale");
+});
+
+test("middle branch clipping retains its prefix and final identifier", () => {
+  const branch = "feature/navigation/issue-23";
+  const clipped = fitBranch(branch, 17, "unicode-wide");
+  assert.match(clipped, /^feature.*….*-23$/);
+  assert.equal(measureEditText(clipped, { widthMethod: "unicode-wide" }), 17);
+  assert.equal(fitBranch(branch, 5, "unicode-wide"), "feat…");
+  const state = projectState(0);
+  state.git = { ...state.git as Extract<ProjectState["git"], { kind: "available" }>, branch };
+  const entry = navigatorEntry(state, 30, true, "unicode-wide");
+  assert.match(entry.metadataLine, /⎇ feature.*….*-23.*clean$/);
+});
+
+test("five target terminal sizes retain selected entry, bounded text and workbench hierarchy", () => {
+  const states = Array.from({ length: 18 }, (_, index) => projectState(index));
+  states[17]!.project.nextAction = "Review the current change";
+  for (const [width, height] of [[120, 32], [100, 25], [80, 24], [56, 22], [42, 18]]) {
+    const layout = dashboardLayout(width!, height!, states.length);
+    const headingRows = navigatorHeadingHeight(layout.wide, layout.navigatorHeight);
+    const rows = layout.navigatorHeight - headingRows;
+    const view = navigatorView(states, 17, rows, layout.navigatorWidth, "unicode-wide");
+    assert.ok(view.start <= 17 && 17 < view.start + view.capacity);
+    assert.equal(view.entries.filter(entry => entry.selected).length, 1);
+    assert.ok(view.entries.every(entry => "nameLine" in entry
+      ? measureEditText(entry.nameLine, { widthMethod: "unicode-wide" }) === layout.navigatorWidth && measureEditText(entry.metadataLine, { widthMethod: "unicode-wide" }) === layout.navigatorWidth
+      : measureEditText(entry.text, { widthMethod: "unicode-wide" }) <= layout.navigatorWidth));
+    const detail = detailLines(states[17], -1, layout.detailWidth, "unicode-wide");
+    assert.equal(detail.rows[0]!.tone, "title");
+    assert.ok(detail.rows.findIndex(row => row.text.includes("NEXT ACTION")) < detail.rows.findIndex(row => row.text.includes("LOCAL GIT")));
+    assert.ok(detail.rows.findIndex(row => row.text.includes("LOCAL GIT")) < detail.rows.findIndex(row => row.text.includes("GITHUB")));
+    assert.ok(detail.rows.some(row => row.tone === "accent" && row.text.includes("Review the current change")));
+    assert.ok(detail.lines.map(line => fitLine(line, layout.detailWidth, "unicode-wide")).every(line => measureEditText(line, { widthMethod: "unicode-wide" }) <= layout.detailWidth));
+    assert.ok(layout.detailHeight > 0);
+  }
+});
+
 test("viewport keeps complete two-line entries and uses single-line fallback for short windows", () => {
   const states = Array.from({ length: 20 }, (_, index) => projectState(index));
   const wide = navigatorView(states, 19, 17, 42, "unicode-wide");
@@ -272,7 +318,7 @@ test("detail hierarchy preserves manual action and separates local and remote st
   state.github = { kind: "unavailable", reason: "Offline" };
   const view = detailLines(state, -1, 48, "unicode-wide");
   assert.deepEqual(view.lines.filter(line => /NEXT ACTION|LOCAL GIT|GITHUB/.test(line)).map(line => line.trim()), ["NEXT ACTION", "LOCAL GIT", "GITHUB"]);
-  assert.ok(view.lines.includes("    Review  界界  this exact task"));
+  assert.ok(view.lines.includes("  ▌ Review  界界  this exact task"));
   assert.match(view.lines.join("\n"), /Branch feature\/details  ·  Dirty.*staged · untracked.*GITHUB.*Unavailable · Offline/s);
   assert.ok(view.rows.some(row => row.tone === "unavailable"));
   state.git = { kind: "available", branch: "abc123", detached: true, staged: false, unstaged: false, untracked: false, clean: true };

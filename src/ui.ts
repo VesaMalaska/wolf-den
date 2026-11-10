@@ -27,6 +27,22 @@ export function fitLine(value: string, width: number, widthMethod: WidthMethod =
   return segments.slice(0, low).join("") + ellipsis;
 }
 
+export function fitBranch(value: string, width: number, widthMethod: WidthMethod = "unicode"): string {
+  const branch = safeText(value);
+  const measure = (text: string) => measureEditText(text, { widthMethod });
+  if (width <= 0) return "";
+  if (measure(branch) <= width || width < 7) return fitLine(branch, width, widthMethod);
+  const parts = Array.from(graphemes.segment(branch), part => part.segment);
+  const suffixBudget = Math.floor((width - 1) / 2);
+  let suffix = "";
+  for (let index = parts.length - 1; index >= 0; index--) {
+    if (measure(parts[index]! + suffix) > suffixBudget) break;
+    suffix = parts[index]! + suffix;
+  }
+  const prefix = fitLine(branch, width - measure(suffix), widthMethod);
+  return prefix.slice(0, -1) + "…" + suffix;
+}
+
 export function visibleWindow(total: number, selected: number, height: number): number {
   if (total <= 0 || height <= 0) return 0;
   const index = clampSelection(selected, total);
@@ -49,7 +65,7 @@ export function navigatorRow(state: ProjectState, width: number, selected: boole
   const available = Math.max(0, width - measure(marker));
   let suffix = `  ${status}${remote}`;
   const branchWidth = Math.min(12, available - 10 - measure(`   · ${status}${remote}`));
-  if (branch && branchWidth >= 4) suffix = `  ${fitLine(branch, branchWidth, widthMethod)} · ${status}${remote}`;
+  if (branch && branchWidth >= 4) suffix = `  ${fitBranch(branch, branchWidth, widthMethod)} · ${status}${remote}`;
   if (measure(suffix) > available - 8) suffix = `  ${status}`;
   if (measure(suffix) > available - 4) suffix = "";
   const name = fitLine(state.project.name, available - measure(suffix), widthMethod);
@@ -75,7 +91,10 @@ export function navigatorEntry(state: ProjectState, width: number, selected: boo
   const statusStart = Math.max(measure(marker), width - measure(statusText));
   const leftWidth = Math.max(0, statusStart - measure(metadataMarker) - 2);
   const remoteText = remote && leftWidth >= measure(remote) + 5 ? remote : "";
-  const branchText = fitLine(branch ? `⎇ ${branch}` : git.kind === "loading" ? "Git…" : git.kind === "unavailable" ? "Git n/a" : "", leftWidth - measure(remoteText), widthMethod);
+  const branchWidth = leftWidth - measure(remoteText);
+  const branchText = branch && branchWidth > measure("⎇ ") ? `⎇ ${fitBranch(branch, branchWidth - measure("⎇ "), widthMethod)}`
+    : branch ? fitLine("⎇", branchWidth, widthMethod)
+    : fitLine(git.kind === "loading" ? "Git…" : git.kind === "unavailable" ? "Git n/a" : "", branchWidth, widthMethod);
   const left = metadataMarker + branchText + remoteText;
   const spacing = " ".repeat(Math.max(0, statusStart - measure(left)));
   const metadataLine = fitLine(left + spacing + statusText, width, widthMethod);
@@ -95,6 +114,24 @@ export function navigatorHeadingText(count: number, width: number, widthMethod: 
   return label + " ".repeat(width - measure(label) - measure(total)) + total;
 }
 
+export function radarSummary(states: ProjectState[]): string {
+  let clean = 0, dirty = 0, loading = 0, stale = 0, unavailable = 0;
+  for (const { git } of states) {
+    if (git.kind === "available") git.clean ? clean++ : dirty++;
+    else if (git.kind === "loading") loading++;
+    else if (git.kind === "stale") stale++;
+    else unavailable++;
+  }
+  if (states.length === 0) return "No projects configured";
+  const items: string[] = [];
+  if (dirty) items.push(`${dirty} dirty`);
+  if (unavailable) items.push(`${unavailable} unavailable`);
+  if (clean) items.push(`${clean} clean`);
+  if (loading) items.push(`${loading} loading`);
+  if (stale) items.push(`${stale} stale`);
+  return items.join(" · ");
+}
+
 export function navigatorHeadingHeight(wide: boolean, height: number): number {
   return wide && height > 1 ? height >= 14 ? 2 : 1 : 0;
 }
@@ -112,9 +149,12 @@ export function navigatorView(states: ProjectState[], selected: number, height: 
   return { index, start, entries, twoLine, gap, capacity };
 }
 
-export function navigatorContent(view: ReturnType<typeof navigatorView>, width: number, widthMethod: WidthMethod, heading?: string, headingGap = 0, theme: SemanticTheme = resolveTheme()): StyledText {
+export function navigatorContent(view: ReturnType<typeof navigatorView>, width: number, widthMethod: WidthMethod, heading?: string, headingGap = 0, theme: SemanticTheme = resolveTheme(), summary?: string): StyledText {
   const chunks = [];
-  if (heading) chunks.push(fg(theme.heading)(fitLine(heading, width, widthMethod) + "\n".repeat(1 + headingGap)));
+  if (heading) {
+    chunks.push(fg(theme.heading)(fitLine(heading, width, widthMethod) + "\n"));
+    if (headingGap) chunks.push(fg(theme.textSecondary)(fitLine(summary ?? "", width, widthMethod) + "\n"));
+  }
   if (view.entries.length === 0) chunks.push(fg(theme.textMuted)(fitLine("No projects configured", width, widthMethod)));
   view.entries.forEach((entry, index) => {
     if (index > 0) chunks.push(fg(theme.textMuted)("\n".repeat(1 + view.gap)));
@@ -186,12 +226,13 @@ function wrapped(value: string, width: number, widthMethod: WidthMethod): string
 export function detailLines(state: ProjectState | undefined, selectedPr: number, width = 80, widthMethod: WidthMethod = "unicode"): { lines: string[]; rows: DetailRow[]; selectedLine: number } {
   const rows: DetailRow[] = [];
   const add = (text: string, tone: DetailTone = "normal") => rows.push({ text, tone });
-  const section = (label: string) => { if (rows.length) add("", "muted"); add(`  ${label}`, label === "NEXT ACTION" ? "accentSubtle" : "heading"); };
+  const section = (label: string) => { if (rows.length) add("", "muted"); add(`  ${label}`, label === "NEXT ACTION" ? "accent" : "heading"); };
   if (!state) { add("  No projects configured. Add a project to the registry.", "muted"); return { lines: rows.map(row => row.text), rows, selectedLine: 0 }; }
   add(`  ${safeText(state.project.name)}`, "title");
   add(`  ${safeText(state.project.lifecycle)}  ·  ${safeText(state.project.path)}`, "muted");
   section("NEXT ACTION");
-  for (const line of wrapped(state.project.nextAction ?? "Not set", Math.max(1, width - 4), widthMethod)) add(`    ${line}`, state.project.nextAction ? "accent" : "muted");
+  for (const [index, line] of wrapped(state.project.nextAction ?? "Not set", Math.max(1, width - 4), widthMethod).entries())
+    add(`${state.project.nextAction && index === 0 ? "  ▌ " : "    "}${line}`, state.project.nextAction ? "accent" : "muted");
   section("LOCAL GIT");
   const git = state.git;
   if (git.kind === "loading") add("    Loading Git state…", "muted");
@@ -325,14 +366,15 @@ export async function runDashboard(): Promise<void> {
     divider.width = dimensions.dividerWidth; divider.height = dimensions.dividerHeight;
     detail.width = dimensions.detailWidth; detail.height = dimensions.detailHeight;
     message.height = dimensions.statusHeight; footer.height = dimensions.footerHeight;
-    title.content = fitLine("🐺 Wolf Den", dimensions.columns, renderer.widthMethod);
+    const overview = `${states.length} project${states.length === 1 ? "" : "s"} · ${radarSummary(states)}`;
+    title.content = fitLine(dimensions.wide ? "🐺 Wolf Den" : `🐺 Wolf Den · ${overview}`, dimensions.columns, renderer.widthMethod);
     const navigatorHeadingRows = navigatorHeadingHeight(dimensions.wide, dimensions.navigatorHeight);
     const navigatorRows = dimensions.navigatorHeight - navigatorHeadingRows;
     const navigator = navigatorView(states, selected, navigatorRows, dimensions.navigatorWidth, renderer.widthMethod);
     selected = navigator.index;
     list.content = navigatorContent(navigator, dimensions.navigatorWidth, renderer.widthMethod,
       navigatorHeadingRows ? navigatorHeadingText(states.length, dimensions.navigatorWidth, renderer.widthMethod) : undefined,
-      navigatorHeadingRows - 1, theme);
+      navigatorHeadingRows - 1, theme, radarSummary(states));
     divider.content = dimensions.wide ? Array(dimensions.dividerHeight).fill("│").join("\n") : "─".repeat(dimensions.dividerWidth);
     const view = showingHelp
       ? { lines: ["Keyboard shortcuts", "↑/↓  Select project", "Tab  Select next PR", "e  Open project in VS Code", "t  Open terminal in project", "f  Open project in file manager", "g  Open GitHub repository", "p  Open selected PR", "r  Refresh selected project's GitHub data", "PgUp/PgDn  Scroll details", "?  Close help", "q / Esc / Ctrl+C  Quit"], selectedLine: 0 }
@@ -341,7 +383,7 @@ export async function runDashboard(): Promise<void> {
     detail.content = "rows" in view && view.rows
       ? new StyledText(view.rows.slice(detailOffset, detailOffset + dimensions.detailHeight).flatMap((row, index, visible) => {
           const line = fitLine(row.text, dimensions.detailWidth, renderer.widthMethod);
-          const content = row.tone === "title" || row.tone === "heading" || row.tone === "selected" ? bold(line) : line;
+          const content = row.tone === "title" || row.tone === "heading" || row.tone === "accent" || row.tone === "selected" ? bold(line) : line;
           const styled = fg(detailToneColor(row.tone, theme))(row.tone === "selected" ? bg(theme.selectionBackground)(content) : content);
           return index === visible.length - 1 ? [styled] : [styled, fg(theme.textMuted)("\n")];
         }))
