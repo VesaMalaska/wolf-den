@@ -62,6 +62,8 @@ Linux quick actions use `code` and `xdg-open` from `PATH`. The `f` shortcut pass
 
 Run `pnpm typecheck`, `pnpm test`, and `pnpm build` for verification. After building, `bin/wolf-den.mjs` is also a launcher for the CLI.
 
+On spacious v0.3 layouts, the Git-state summary sits at the bottom of the project radar. The selected-project workbench has a divided identity header, a compact plum Next Action banner, side-by-side Local Git and GitHub zones when the detail pane is wide enough, a bordered PR section, and a quick-action group. Narrow detail panes stack the status zones and simplify borders; `PgUp`/`PgDn` keeps lower sections accessible.
+
 ## Troubleshooting
 
 - **Registry error:** create `~/.config/wolf-den/projects.json` using the example above. JSON must use `version: 1`; project IDs must be unique, paths absolute or `~/` based, and repository values must be `owner/name`. Unknown fields are rejected. A missing project directory remains listed with an unavailable Git state.

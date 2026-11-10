@@ -133,7 +133,7 @@ export function radarSummary(states: ProjectState[]): string {
 }
 
 export function navigatorHeadingHeight(wide: boolean, height: number): number {
-  return wide && height > 1 ? height >= 14 ? 2 : 1 : 0;
+  return wide && height > 1 ? 1 : 0;
 }
 
 export function navigatorView(states: ProjectState[], selected: number, height: number, width: number, widthMethod: WidthMethod = "unicode") {
@@ -181,6 +181,21 @@ export function navigatorContent(view: ReturnType<typeof navigatorView>, width: 
   return new StyledText(chunks);
 }
 
+export function radarContent(states: ProjectState[], width: number, widthMethod: WidthMethod, theme: SemanticTheme = resolveTheme()): StyledText {
+  const chunks = [fg(theme.divider)("─".repeat(Math.max(0, width)) + "\n"), fg(theme.heading)(fitLine("GIT STATUS · LOADED", width, widthMethod) + "\n")];
+  let used = 0;
+  for (const label of radarSummary(states).split(" · ")) {
+    const part = (used ? "  " : "") + label;
+    const size = measureEditText(part, { widthMethod });
+    if (used + size > width) break;
+    const color = label.includes("dirty") ? theme.attention : label.includes("unavailable") ? theme.unavailable
+      : label.includes("clean") ? theme.success : label.includes("stale") ? theme.attention : label.includes("loading") ? theme.info : theme.textMuted;
+    chunks.push(fg(color)(part));
+    used += size;
+  }
+  return new StyledText(chunks);
+}
+
 const WIDE_MIN_WIDTH = 88;
 const WIDE_MIN_HEIGHT = 8;
 
@@ -196,17 +211,41 @@ export function dashboardLayout(width: number, height: number, projectCount: num
     const navigatorWidth = Math.min(42, Math.max(26, Math.floor(columns * 0.34)));
     return { wide, columns, headerHeight, statusHeight, footerHeight, contentHeight,
       navigatorWidth, dividerWidth: 1, detailWidth: columns - navigatorWidth - 1,
-      navigatorHeight: contentHeight, dividerHeight: contentHeight, detailHeight: contentHeight };
+      navigatorHeight: contentHeight, radarHeight: contentHeight >= 14 ? 3 : 0,
+      dividerHeight: contentHeight, detailHeight: contentHeight };
   }
   const navigatorHeight = contentHeight === 0 ? 0 : Math.min(contentHeight, Math.max(1, Math.min(Math.max(2, Math.floor(contentHeight / 3)), Math.max(1, projectCount * 2))));
   const dividerHeight = contentHeight > navigatorHeight + 1 ? 1 : 0;
   return { wide, columns, headerHeight, statusHeight, footerHeight, contentHeight,
     navigatorWidth: columns, dividerWidth: columns, detailWidth: columns,
-    navigatorHeight, dividerHeight, detailHeight: contentHeight - navigatorHeight - dividerHeight };
+    navigatorHeight, radarHeight: 0, dividerHeight, detailHeight: contentHeight - navigatorHeight - dividerHeight };
 }
 
 type DetailTone = "heading" | "accent" | "accentSubtle" | "title" | "muted" | "normal" | "good" | "warn" | "error" | "unavailable" | "selected";
-type DetailRow = { text: string; tone: DetailTone };
+type DetailRow = { text: string; tone: DetailTone; spans?: { text: string; tone: DetailTone }[] };
+
+function boxEdge(label: string, width: number, bottom = false, widthMethod: WidthMethod = "unicode"): string {
+  if (width < 4) return fitLine(label, width, widthMethod);
+  if (bottom) return `╰${"─".repeat(width - 2)}╯`;
+  const caption = fitLine(`─ ${label} `, width - 2, widthMethod);
+  return `╭${caption}${"─".repeat(Math.max(0, width - 2 - measureEditText(caption, { widthMethod })))}╮`;
+}
+
+function boxBody(value: string, width: number, widthMethod: WidthMethod): string {
+  if (width < 4) return fitLine(value, width, widthMethod);
+  const content = fitLine(value, width - 4, widthMethod);
+  return `│ ${content}${" ".repeat(Math.max(0, width - 4 - measureEditText(content, { widthMethod })))} │`;
+}
+
+function boxBodySpans(value: string, width: number, tone: DetailTone, widthMethod: WidthMethod): { text: string; tone: DetailTone }[] {
+  if (width < 4) return [{ text: fitLine(value, width, widthMethod), tone }];
+  const content = fitLine(value, width - 4, widthMethod);
+  return [
+    { text: "│ ", tone: "heading" },
+    { text: content, tone },
+    { text: " ".repeat(Math.max(0, width - 4 - measureEditText(content, { widthMethod }))) + " │", tone: "heading" },
+  ];
+}
 
 function wrapped(value: string, width: number, widthMethod: WidthMethod): string[] {
   const available = Math.max(1, width);
@@ -223,49 +262,80 @@ function wrapped(value: string, width: number, widthMethod: WidthMethod): string
   return lines;
 }
 
-export function detailLines(state: ProjectState | undefined, selectedPr: number, width = 80, widthMethod: WidthMethod = "unicode"): { lines: string[]; rows: DetailRow[]; selectedLine: number } {
+export function detailLines(state: ProjectState | undefined, selectedPr: number, width = 80, widthMethod: WidthMethod = "unicode", wide = false): { lines: string[]; rows: DetailRow[]; selectedLine: number } {
   const rows: DetailRow[] = [];
   const add = (text: string, tone: DetailTone = "normal") => rows.push({ text, tone });
-  const section = (label: string) => { if (rows.length) add("", "muted"); add(`  ${label}`, label === "NEXT ACTION" ? "accent" : "heading"); };
+  const addSpans = (spans: { text: string; tone: DetailTone }[]) => rows.push({ text: spans.map(span => span.text).join(""), tone: "normal", spans });
   if (!state) { add("  No projects configured. Add a project to the registry.", "muted"); return { lines: rows.map(row => row.text), rows, selectedLine: 0 }; }
-  add(`  ${safeText(state.project.name)}`, "title");
-  add(`  ${safeText(state.project.lifecycle)}  ·  ${safeText(state.project.path)}`, "muted");
-  section("NEXT ACTION");
-  for (const [index, line] of wrapped(state.project.nextAction ?? "Not set", Math.max(1, width - 4), widthMethod).entries())
-    add(`${state.project.nextAction && index === 0 ? "  ▌ " : "    "}${line}`, state.project.nextAction ? "accent" : "muted");
-  section("LOCAL GIT");
+  add(`  ◇ ${safeText(state.project.name)}`, "title");
+  const lifecycle = fitLine(`  ${safeText(state.project.lifecycle).toUpperCase()}`, width, widthMethod);
+  addSpans([{ text: lifecycle, tone: "normal" },
+    { text: fitLine(`  ·  ${safeText(state.project.path)}`, Math.max(0, width - measureEditText(lifecycle, { widthMethod })), widthMethod), tone: "muted" }]);
+  add("  " + "─".repeat(Math.max(0, width - 2)), "heading");
+  add(boxEdge("NEXT ACTION", width, false, widthMethod), "accent");
+  for (const line of wrapped(state.project.nextAction ?? "Not set", Math.max(1, width - 4), widthMethod))
+    add(boxBody(line, width, widthMethod), state.project.nextAction ? "accent" : "muted");
+  add(boxEdge("", width, true, widthMethod), "accent");
+  add("", "muted");
   const git = state.git;
-  if (git.kind === "loading") add("    Loading Git state…", "muted");
-  else if (git.kind === "unavailable") add(`    Unavailable · ${safeText(git.reason)}`, "unavailable");
-  else if (git.kind === "stale") add(`    Stale · ${safeText(git.previous.branch)} · ${safeText(git.reason)}`, "warn");
-  else {
-    add(`    ${git.detached ? "Detached HEAD" : `Branch ${safeText(git.branch)}`}  ·  ${git.clean ? "Clean" : "Dirty"}`, git.clean ? "good" : "warn");
-    if (!git.clean) add(`    ${[git.staged && "staged", git.unstaged && "unstaged", git.untracked && "untracked"].filter(Boolean).join(" · ")}`, "muted");
-  }
-  section("GITHUB");
+  const local: DetailRow[] = git.kind === "loading" ? [{ text: "Loading Git state…", tone: "muted" }]
+    : git.kind === "unavailable" ? [{ text: `Unavailable · ${safeText(git.reason)}`, tone: "unavailable" }]
+    : git.kind === "stale" ? [{ text: `Stale · ${safeText(git.previous.branch)}`, tone: "warn" }, { text: safeText(git.reason), tone: "muted" }]
+    : [{ text: git.detached ? "Detached HEAD" : `Branch ${safeText(git.branch)}`, tone: "normal" },
+      { text: git.clean ? "● Clean" : "● Dirty", tone: git.clean ? "good" : "warn" },
+      ...(!git.clean ? [{ text: [git.staged && "staged", git.unstaged && "unstaged", git.untracked && "untracked"].filter(Boolean).join(" · "), tone: "muted" as const }] : [])];
   const remote = state.github;
   const data = remote.kind === "available" ? remote : remote.kind === "stale" || remote.kind === "loading" ? remote.previous : undefined;
-  if (remote.kind === "unavailable") add(`    Unavailable · ${safeText(remote.reason)}`, "unavailable");
-  else {
-    if (remote.kind === "loading") add(`    Loading${data ? " · previous data below" : "…"}`, "muted");
-    if (remote.kind === "stale") add(`    Stale · ${safeText(remote.reason)}`, "warn");
-    if (data) add(`    ${data.issues} open issues  ·  ${data.pullRequests.length} open PRs${remote.kind === "available" ? "" : " (previous)"}`, remote.kind === "available" ? "normal" : "warn");
+  const github: DetailRow[] = remote.kind === "unavailable" ? [{ text: `Unavailable · ${safeText(remote.reason)}`, tone: "unavailable" }] : [];
+  if (remote.kind === "loading") github.push({ text: `Loading${data ? " · previous data below" : "…"}`, tone: "muted" });
+  if (remote.kind === "stale") github.push({ text: `Stale · ${safeText(remote.reason)}`, tone: "warn" });
+  if (data) github.push({ text: `Issues ${data.issues} open${remote.kind === "available" ? "" : " (previous)"}`, tone: "normal" },
+    { text: `PRs ${data.pullRequests.length} open${remote.kind === "available" ? "" : " (previous)"}`, tone: "normal" });
+  const paired = wide && width >= 68;
+  if (paired) {
+    const leftWidth = Math.floor((width - 1) / 2);
+    const rightWidth = width - leftWidth - 1;
+    add(`${boxEdge("LOCAL GIT", leftWidth, false, widthMethod)} ${boxEdge("GITHUB", rightWidth, false, widthMethod)}`, "heading");
+    for (let index = 0; index < Math.max(2, local.length, github.length); index++)
+      addSpans([
+        ...boxBodySpans(local[index]?.text ?? "", leftWidth, local[index]?.tone ?? "normal", widthMethod),
+        { text: " ", tone: "muted" },
+        ...boxBodySpans(github[index]?.text ?? "", rightWidth, github[index]?.tone ?? "normal", widthMethod),
+      ]);
+    add(`${boxEdge("", leftWidth, true, widthMethod)} ${boxEdge("", rightWidth, true, widthMethod)}`, "heading");
+  } else {
+    for (const [label, values] of [["LOCAL GIT", local], ["GITHUB", github]] as const) {
+      if (width >= 50) add(boxEdge(label, width, false, widthMethod), "heading");
+      else add(`  ${label}`, "heading");
+      for (const value of values) {
+        if (width >= 50) addSpans(boxBodySpans(value.text, width, value.tone, widthMethod));
+        else add(`    ${value.text}`, value.tone);
+      }
+      if (width >= 50) add(boxEdge("", width, true, widthMethod), "heading");
+      add("", "muted");
+    }
   }
   let selectedLine = 0;
   if (data?.pullRequests.length) {
-    section("PULL REQUESTS");
+    add("", "muted");
+    add(width >= 50 ? boxEdge(`PULL REQUESTS (${data.pullRequests.length})`, width, false, widthMethod) : `  PULL REQUESTS (${data.pullRequests.length})`, "heading");
     data.pullRequests.forEach((pr, index) => {
-      if (index > 0) add("", "muted");
+      if (index > 0) add(width >= 50 ? boxBody("─".repeat(Math.max(0, width - 4)), width, widthMethod) : "", "muted");
       if (index === selectedPr) selectedLine = rows.length;
       const prefix = `${index === selectedPr ? "  ▌" : "   "} #${pr.number} `;
       const suffix = pr.draft ? " [draft]" : "";
-      const titleWidth = Math.max(1, width - measureEditText(prefix + suffix, { widthMethod }));
+      const titleWidth = Math.max(1, width - measureEditText(prefix + suffix, { widthMethod }) - (width >= 50 ? 4 : 0));
       const titleLines = wrapped(pr.title, titleWidth, widthMethod);
-      titleLines.forEach((line, lineIndex) => add(`${lineIndex === 0 ? prefix : "      "}${line}${lineIndex === 0 ? suffix : ""}`, index === selectedPr ? "selected" : "normal"));
-      add(`      Review ${safeText(pr.review ?? "unavailable")}  ·  Checks ${safeText(pr.checks ?? "unavailable")}`, "muted");
+      titleLines.forEach((line, lineIndex) => {
+        const text = `${lineIndex === 0 ? prefix : "      "}${line}${lineIndex === 0 ? suffix : ""}`;
+        add(width >= 50 ? boxBody(text, width, widthMethod) : text, index === selectedPr ? "selected" : "normal");
+      });
+      const metadata = `      Review ${safeText(pr.review ?? "unavailable")}  ·  Checks ${safeText(pr.checks ?? "unavailable")}`;
+      add(width >= 50 ? boxBody(metadata, width, widthMethod) : metadata, "muted");
     });
+    if (width >= 50) add(boxEdge("", width, true, widthMethod), "heading");
   }
-  if (width >= 38) { section("QUICK ACTIONS"); add("    f files  ·  e editor  ·  t terminal  ·  g repo  ·  p PR", "muted"); }
+  if (width >= 38) { add("", "muted"); add("  QUICK ACTIONS", "heading"); add("  [f] files  [e] editor  [t] terminal  [g] repo  [p] PR", "muted"); }
   return { lines: rows.map(row => row.text), rows, selectedLine };
 }
 
@@ -342,13 +412,19 @@ export async function runDashboard(): Promise<void> {
   const layout = new BoxRenderable(renderer, { flexDirection: "column", gap: 0, width: "100%", height: "100%", backgroundColor: theme.background });
   const title = new TextRenderable(renderer, { content: "Wolf Den", fg: theme.heading });
   const panels = new BoxRenderable(renderer, { flexDirection: "row", gap: 0, width: "100%", backgroundColor: theme.panel });
+  const listPanel = new BoxRenderable(renderer, { flexDirection: "column", gap: 0, backgroundColor: theme.panel });
+  const listHeading = new TextRenderable(renderer, { content: "", fg: theme.heading });
   const list = new TextRenderable(renderer, { content: "", fg: theme.textPrimary });
+  const listSummary = new TextRenderable(renderer, { content: "", fg: theme.textSecondary });
   const divider = new TextRenderable(renderer, { content: "", fg: theme.divider });
   const detail = new TextRenderable(renderer, { content: "", fg: theme.textSecondary });
   const message = new TextRenderable(renderer, { content: "", fg: theme.attention, bg: theme.panelAlt });
   const footer = new TextRenderable(renderer, { content: "", fg: theme.textMuted });
   layout.add(title);
-  panels.add(list);
+  listPanel.add(listHeading);
+  listPanel.add(list);
+  listPanel.add(listSummary);
+  panels.add(listPanel);
   panels.add(divider);
   panels.add(detail);
   layout.add(panels);
@@ -362,30 +438,37 @@ export async function runDashboard(): Promise<void> {
     panels.flexDirection = dimensions.wide ? "row" : "column";
     title.height = dimensions.headerHeight;
     panels.height = dimensions.contentHeight;
-    list.width = dimensions.navigatorWidth; list.height = dimensions.navigatorHeight;
+    listPanel.width = dimensions.navigatorWidth; listPanel.height = dimensions.navigatorHeight;
+    const navigatorHeadingRows = navigatorHeadingHeight(dimensions.wide, dimensions.navigatorHeight);
+    const navigatorRows = Math.max(0, dimensions.navigatorHeight - navigatorHeadingRows - dimensions.radarHeight);
+    listHeading.width = dimensions.navigatorWidth; listHeading.height = navigatorHeadingRows;
+    list.width = dimensions.navigatorWidth; list.height = navigatorRows;
+    listSummary.width = dimensions.navigatorWidth; listSummary.height = dimensions.radarHeight;
     divider.width = dimensions.dividerWidth; divider.height = dimensions.dividerHeight;
     detail.width = dimensions.detailWidth; detail.height = dimensions.detailHeight;
     message.height = dimensions.statusHeight; footer.height = dimensions.footerHeight;
     const overview = `${states.length} project${states.length === 1 ? "" : "s"} · ${radarSummary(states)}`;
     title.content = fitLine(dimensions.wide ? "🐺 Wolf Den" : `🐺 Wolf Den · ${overview}`, dimensions.columns, renderer.widthMethod);
-    const navigatorHeadingRows = navigatorHeadingHeight(dimensions.wide, dimensions.navigatorHeight);
-    const navigatorRows = dimensions.navigatorHeight - navigatorHeadingRows;
     const navigator = navigatorView(states, selected, navigatorRows, dimensions.navigatorWidth, renderer.widthMethod);
     selected = navigator.index;
-    list.content = navigatorContent(navigator, dimensions.navigatorWidth, renderer.widthMethod,
-      navigatorHeadingRows ? navigatorHeadingText(states.length, dimensions.navigatorWidth, renderer.widthMethod) : undefined,
-      navigatorHeadingRows - 1, theme, radarSummary(states));
+    listHeading.content = navigatorHeadingRows ? navigatorHeadingText(states.length, dimensions.navigatorWidth, renderer.widthMethod) : "";
+    list.content = navigatorContent(navigator, dimensions.navigatorWidth, renderer.widthMethod, undefined, 0, theme);
+    listSummary.content = dimensions.radarHeight ? radarContent(states, dimensions.navigatorWidth, renderer.widthMethod, theme) : "";
     divider.content = dimensions.wide ? Array(dimensions.dividerHeight).fill("│").join("\n") : "─".repeat(dimensions.dividerWidth);
     const view = showingHelp
       ? { lines: ["Keyboard shortcuts", "↑/↓  Select project", "Tab  Select next PR", "e  Open project in VS Code", "t  Open terminal in project", "f  Open project in file manager", "g  Open GitHub repository", "p  Open selected PR", "r  Refresh selected project's GitHub data", "PgUp/PgDn  Scroll details", "?  Close help", "q / Esc / Ctrl+C  Quit"], selectedLine: 0 }
-      : registryLoaded ? detailLines(states[selected], selectedPr, dimensions.detailWidth, renderer.widthMethod) : { lines: [feedback.text], selectedLine: 0 };
+      : registryLoaded ? detailLines(states[selected], selectedPr, dimensions.detailWidth, renderer.widthMethod, dimensions.wide) : { lines: [feedback.text], selectedLine: 0 };
     detailOffset = Math.min(detailOffset, Math.max(0, view.lines.length - dimensions.detailHeight));
     detail.content = "rows" in view && view.rows
       ? new StyledText(view.rows.slice(detailOffset, detailOffset + dimensions.detailHeight).flatMap((row, index, visible) => {
           const line = fitLine(row.text, dimensions.detailWidth, renderer.widthMethod);
-          const content = row.tone === "title" || row.tone === "heading" || row.tone === "accent" || row.tone === "selected" ? bold(line) : line;
-          const styled = fg(detailToneColor(row.tone, theme))(row.tone === "selected" ? bg(theme.selectionBackground)(content) : content);
-          return index === visible.length - 1 ? [styled] : [styled, fg(theme.textMuted)("\n")];
+          const styled = row.spans ? row.spans.map(span => fg(detailToneColor(span.tone, theme))(span.text)) : (() => {
+            const content = row.tone === "title" || row.tone === "heading" || row.tone === "accent" || row.tone === "selected" ? bold(line) : line;
+            const surface = row.tone === "selected" ? bg(theme.selectionBackground)(content)
+              : row.tone === "accent" ? bg(theme.panelAlt)(content) : content;
+            return [fg(detailToneColor(row.tone, theme))(surface)];
+          })();
+          return index === visible.length - 1 ? styled : [...styled, fg(theme.textMuted)("\n")];
         }))
       : view.lines.slice(detailOffset, detailOffset + dimensions.detailHeight).map(line => fitLine(line, dimensions.detailWidth, renderer.widthMethod)).join("\n");
     const shown = feedbackForSelection(feedback, states[selected]?.project.id);
@@ -407,7 +490,8 @@ export async function runDashboard(): Promise<void> {
       const data = state?.github.kind === "available" ? state.github : undefined;
       if (!data?.pullRequests.length) { feedback = { kind: "unavailable", text: "No available PRs to select for this project.", projectId: state?.project.id }; render(); return; }
       selectedPr = (selectedPr + 1) % data.pullRequests.length;
-      detailOffset = scrollToLine(detailOffset, detailLines(state, selectedPr, dashboardLayout(renderer.terminalWidth, renderer.terminalHeight, states.length).detailWidth, renderer.widthMethod).selectedLine, dashboardLayout(renderer.terminalWidth, renderer.terminalHeight, states.length).detailHeight);
+      const dimensions = dashboardLayout(renderer.terminalWidth, renderer.terminalHeight, states.length);
+      detailOffset = scrollToLine(detailOffset, detailLines(state, selectedPr, dimensions.detailWidth, renderer.widthMethod, dimensions.wide).selectedLine, dimensions.detailHeight);
       feedback = { kind: "info", text: `Selected PR #${data.pullRequests[selectedPr]!.number}.`, projectId: state!.project.id };
       render(); return;
     }
@@ -468,7 +552,10 @@ export async function runDashboard(): Promise<void> {
     layout.backgroundColor = theme.background;
     panels.backgroundColor = theme.panel;
     title.fg = theme.heading;
+    listPanel.backgroundColor = theme.panel;
+    listHeading.fg = theme.heading;
     list.fg = theme.textPrimary;
+    listSummary.fg = theme.textSecondary;
     divider.fg = theme.divider;
     detail.fg = theme.textSecondary;
     message.bg = theme.panelAlt;
