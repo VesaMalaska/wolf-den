@@ -221,8 +221,9 @@ export function dashboardLayout(width: number, height: number, projectCount: num
     navigatorHeight, radarHeight: 0, dividerHeight, detailHeight: contentHeight - navigatorHeight - dividerHeight };
 }
 
-type DetailTone = "heading" | "accent" | "accentSubtle" | "title" | "muted" | "normal" | "good" | "warn" | "error" | "unavailable" | "selected";
-type DetailRow = { text: string; tone: DetailTone; spans?: { text: string; tone: DetailTone }[] };
+type DetailTone = "heading" | "divider" | "accent" | "accentSubtle" | "action" | "title" | "muted" | "normal" | "good" | "warn" | "error" | "unavailable" | "selected";
+type DetailSpan = { text: string; tone: DetailTone; strong?: boolean };
+type DetailRow = { text: string; tone: DetailTone; spans?: DetailSpan[]; surface?: "alt" };
 
 function boxEdge(label: string, width: number, bottom = false, widthMethod: WidthMethod = "unicode"): string {
   if (width < 4) return fitLine(label, width, widthMethod);
@@ -237,13 +238,23 @@ function boxBody(value: string, width: number, widthMethod: WidthMethod): string
   return `│ ${content}${" ".repeat(Math.max(0, width - 4 - measureEditText(content, { widthMethod })))} │`;
 }
 
-function boxBodySpans(value: string, width: number, tone: DetailTone, widthMethod: WidthMethod): { text: string; tone: DetailTone }[] {
+function boxBodySpans(value: string, width: number, tone: DetailTone, widthMethod: WidthMethod, borderTone: DetailTone = "divider"): { text: string; tone: DetailTone }[] {
   if (width < 4) return [{ text: fitLine(value, width, widthMethod), tone }];
   const content = fitLine(value, width - 4, widthMethod);
   return [
-    { text: "│ ", tone: "heading" },
+    { text: "│ ", tone: borderTone },
     { text: content, tone },
-    { text: " ".repeat(Math.max(0, width - 4 - measureEditText(content, { widthMethod }))) + " │", tone: "heading" },
+    { text: " ".repeat(Math.max(0, width - 4 - measureEditText(content, { widthMethod }))) + " │", tone: borderTone },
+  ];
+}
+
+function boxTopSpans(label: string, width: number, widthMethod: WidthMethod): DetailSpan[] {
+  if (width < 4) return [{ text: fitLine(label, width, widthMethod), tone: "heading", strong: true }];
+  const caption = fitLine(label, width - 4, widthMethod);
+  return [
+    { text: "╭─ ", tone: "divider" },
+    { text: caption, tone: "heading", strong: true },
+    { text: " ".repeat(Math.max(0, width - 4 - measureEditText(caption, { widthMethod }))) + "╮", tone: "divider" },
   ];
 }
 
@@ -264,18 +275,20 @@ function wrapped(value: string, width: number, widthMethod: WidthMethod): string
 
 export function detailLines(state: ProjectState | undefined, selectedPr: number, width = 80, widthMethod: WidthMethod = "unicode", wide = false): { lines: string[]; rows: DetailRow[]; selectedLine: number } {
   const rows: DetailRow[] = [];
-  const add = (text: string, tone: DetailTone = "normal") => rows.push({ text, tone });
-  const addSpans = (spans: { text: string; tone: DetailTone }[]) => rows.push({ text: spans.map(span => span.text).join(""), tone: "normal", spans });
+  const add = (text: string, tone: DetailTone = "normal", surface?: "alt") => rows.push({ text, tone, surface });
+  const addSpans = (spans: DetailSpan[], tone: DetailTone = "normal", surface?: "alt") => rows.push({ text: spans.map(span => span.text).join(""), tone, spans, surface });
   if (!state) { add("  No projects configured. Add a project to the registry.", "muted"); return { lines: rows.map(row => row.text), rows, selectedLine: 0 }; }
-  add(`  ◇ ${safeText(state.project.name)}`, "title");
+  const identityMarker = fitLine("  ◇ ", width, widthMethod);
+  addSpans([{ text: identityMarker, tone: "accentSubtle" },
+    { text: fitLine(state.project.name, Math.max(0, width - measureEditText(identityMarker, { widthMethod })), widthMethod), tone: "title", strong: true }], "title");
   const lifecycle = fitLine(`  ${safeText(state.project.lifecycle).toUpperCase()}`, width, widthMethod);
   addSpans([{ text: lifecycle, tone: "normal" },
     { text: fitLine(`  ·  ${safeText(state.project.path)}`, Math.max(0, width - measureEditText(lifecycle, { widthMethod })), widthMethod), tone: "muted" }]);
-  add("  " + "─".repeat(Math.max(0, width - 2)), "heading");
-  add(boxEdge("NEXT ACTION", width, false, widthMethod), "accent");
+  add("  " + "─".repeat(Math.max(0, width - 2)), "divider");
+  add(boxEdge("NEXT ACTION", width, false, widthMethod), "accentSubtle", "alt");
   for (const line of wrapped(state.project.nextAction ?? "Not set", Math.max(1, width - 4), widthMethod))
-    add(boxBody(line, width, widthMethod), state.project.nextAction ? "accent" : "muted");
-  add(boxEdge("", width, true, widthMethod), "accent");
+    addSpans(boxBodySpans(line, width, state.project.nextAction ? "action" : "muted", widthMethod, "accentSubtle"), "normal", "alt");
+  add(boxEdge("", width, true, widthMethod), "accentSubtle", "alt");
   add("", "muted");
   const git = state.git;
   const local: DetailRow[] = git.kind === "loading" ? [{ text: "Loading Git state…", tone: "muted" }]
@@ -289,36 +302,38 @@ export function detailLines(state: ProjectState | undefined, selectedPr: number,
   const github: DetailRow[] = remote.kind === "unavailable" ? [{ text: `Unavailable · ${safeText(remote.reason)}`, tone: "unavailable" }] : [];
   if (remote.kind === "loading") github.push({ text: `Loading${data ? " · previous data below" : "…"}`, tone: "muted" });
   if (remote.kind === "stale") github.push({ text: `Stale · ${safeText(remote.reason)}`, tone: "warn" });
+  if (remote.kind === "available") github.push({ text: "Available", tone: "good" });
   if (data) github.push({ text: `Issues ${data.issues} open${remote.kind === "available" ? "" : " (previous)"}`, tone: "normal" },
     { text: `PRs ${data.pullRequests.length} open${remote.kind === "available" ? "" : " (previous)"}`, tone: "normal" });
   const paired = wide && width >= 68;
   if (paired) {
     const leftWidth = Math.floor((width - 1) / 2);
     const rightWidth = width - leftWidth - 1;
-    add(`${boxEdge("LOCAL GIT", leftWidth, false, widthMethod)} ${boxEdge("GITHUB", rightWidth, false, widthMethod)}`, "heading");
+    addSpans([...boxTopSpans("LOCAL GIT", leftWidth, widthMethod), { text: " ", tone: "muted" }, ...boxTopSpans("GITHUB", rightWidth, widthMethod)], "normal", "alt");
     for (let index = 0; index < Math.max(2, local.length, github.length); index++)
       addSpans([
         ...boxBodySpans(local[index]?.text ?? "", leftWidth, local[index]?.tone ?? "normal", widthMethod),
         { text: " ", tone: "muted" },
         ...boxBodySpans(github[index]?.text ?? "", rightWidth, github[index]?.tone ?? "normal", widthMethod),
-      ]);
-    add(`${boxEdge("", leftWidth, true, widthMethod)} ${boxEdge("", rightWidth, true, widthMethod)}`, "heading");
+      ], "normal", "alt");
+    add(`${boxEdge("", leftWidth, true, widthMethod)} ${boxEdge("", rightWidth, true, widthMethod)}`, "divider", "alt");
   } else {
     for (const [label, values] of [["LOCAL GIT", local], ["GITHUB", github]] as const) {
-      if (width >= 50) add(boxEdge(label, width, false, widthMethod), "heading");
+      if (width >= 50) addSpans(boxTopSpans(label, width, widthMethod), "normal", "alt");
       else add(`  ${label}`, "heading");
       for (const value of values) {
-        if (width >= 50) addSpans(boxBodySpans(value.text, width, value.tone, widthMethod));
+        if (width >= 50) addSpans(boxBodySpans(value.text, width, value.tone, widthMethod), "normal", "alt");
         else add(`    ${value.text}`, value.tone);
       }
-      if (width >= 50) add(boxEdge("", width, true, widthMethod), "heading");
+      if (width >= 50) add(boxEdge("", width, true, widthMethod), "divider", "alt");
       add("", "muted");
     }
   }
   let selectedLine = 0;
   if (data?.pullRequests.length) {
     add("", "muted");
-    add(width >= 50 ? boxEdge(`PULL REQUESTS (${data.pullRequests.length})`, width, false, widthMethod) : `  PULL REQUESTS (${data.pullRequests.length})`, "heading");
+    if (width >= 50) addSpans(boxTopSpans(`PULL REQUESTS (${data.pullRequests.length})`, width, widthMethod));
+    else add(`  PULL REQUESTS (${data.pullRequests.length})`, "heading");
     data.pullRequests.forEach((pr, index) => {
       if (index > 0) add(width >= 50 ? boxBody("─".repeat(Math.max(0, width - 4)), width, widthMethod) : "", "muted");
       if (index === selectedPr) selectedLine = rows.length;
@@ -333,7 +348,7 @@ export function detailLines(state: ProjectState | undefined, selectedPr: number,
       const metadata = `      Review ${safeText(pr.review ?? "unavailable")}  ·  Checks ${safeText(pr.checks ?? "unavailable")}`;
       add(width >= 50 ? boxBody(metadata, width, widthMethod) : metadata, "muted");
     });
-    if (width >= 50) add(boxEdge("", width, true, widthMethod), "heading");
+    if (width >= 50) add(boxEdge("", width, true, widthMethod), "divider");
   }
   if (width >= 38) { add("", "muted"); add("  QUICK ACTIONS", "heading"); add("  [f] files  [e] editor  [t] terminal  [g] repo  [p] PR", "muted"); }
   return { lines: rows.map(row => row.text), rows, selectedLine };
@@ -350,7 +365,8 @@ export function feedbackColor(kind: Feedback["kind"], theme: SemanticTheme): str
 }
 
 export function detailToneColor(tone: DetailTone, theme: SemanticTheme): string {
-  return { heading: theme.heading, accent: theme.accent, accentSubtle: theme.accentSubtle,
+  return { heading: theme.heading, divider: theme.divider, accent: theme.accent, accentSubtle: theme.accentSubtle,
+    action: theme.textPrimary,
     title: theme.textPrimary, muted: theme.textMuted, normal: theme.textSecondary,
     good: theme.success, warn: theme.attention, error: theme.error, unavailable: theme.unavailable,
     selected: theme.textOnSelection }[tone];
@@ -462,10 +478,13 @@ export async function runDashboard(): Promise<void> {
     detail.content = "rows" in view && view.rows
       ? new StyledText(view.rows.slice(detailOffset, detailOffset + dimensions.detailHeight).flatMap((row, index, visible) => {
           const line = fitLine(row.text, dimensions.detailWidth, renderer.widthMethod);
-          const styled = row.spans ? row.spans.map(span => fg(detailToneColor(span.tone, theme))(span.text)) : (() => {
-            const content = row.tone === "title" || row.tone === "heading" || row.tone === "accent" || row.tone === "selected" ? bold(line) : line;
+          const styled = row.spans ? row.spans.map(span => {
+            const content = span.strong ? bold(span.text) : span.text;
+            return fg(detailToneColor(span.tone, theme))(row.surface === "alt" ? bg(theme.panelAlt)(content) : content);
+          }) : (() => {
+            const content = row.tone === "title" || row.tone === "heading" || row.tone === "accent" || row.tone === "action" || row.tone === "selected" ? bold(line) : line;
             const surface = row.tone === "selected" ? bg(theme.selectionBackground)(content)
-              : row.tone === "accent" ? bg(theme.panelAlt)(content) : content;
+              : row.surface === "alt" ? bg(theme.panelAlt)(content) : content;
             return [fg(detailToneColor(row.tone, theme))(surface)];
           })();
           return index === visible.length - 1 ? styled : [...styled, fg(theme.textMuted)("\n")];

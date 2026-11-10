@@ -231,7 +231,7 @@ test("five target terminal sizes retain selected entry, bounded text and workben
     assert.equal(detail.rows[0]!.tone, "title");
     assert.ok(detail.rows.findIndex(row => row.text.includes("NEXT ACTION")) < detail.rows.findIndex(row => row.text.includes("LOCAL GIT")));
     assert.ok(detail.rows.findIndex(row => row.text.includes("LOCAL GIT")) < detail.rows.findIndex(row => row.text.includes("GITHUB")));
-    assert.ok(detail.rows.some(row => row.tone === "accent" && row.text.includes("Review the current change")));
+    assert.ok(detail.rows.some(row => row.surface === "alt" && row.spans?.some(span => span.tone === "action" && span.text.includes("Review the current change"))));
     assert.ok(detail.lines.map(line => fitLine(line, layout.detailWidth, "unicode-wide")).every(line => measureEditText(line, { widthMethod: "unicode-wide" }) <= layout.detailWidth));
     assert.ok(layout.detailHeight > 0);
   }
@@ -263,7 +263,7 @@ test("selected project highlight covers both lines and stops before the next ent
 });
 
 test("semantic overrides reach navigator selection, statuses and detail feedback", () => {
-  const theme = resolveTheme("wolfy-dark", { selectionBackground: "#405060", success: "#AABBCC", error: "#DDEEFF", heading: "#ABCDEF" });
+  const theme = resolveTheme("wolfy-dark", { selectionBackground: "#405060", success: "#AABBCC", error: "#DDEEFF", heading: "#ABCDEF", divider: "#445566", panelAlt: "#223344" });
   const view = navigatorView([projectState(0), projectState(2)], 1, 4, 32, "unicode-wide");
   const content = navigatorContent(view, 32, "unicode-wide", "PROJECTS", 0, theme);
   assert.ok(content.chunks.some(chunk => chunk.bg?.toInts().slice(0, 3).join() === "64,80,96"));
@@ -274,13 +274,17 @@ test("semantic overrides reach navigator selection, statuses and detail feedback
   assert.equal(detailToneColor("unavailable", theme), theme.unavailable);
   assert.equal(detailToneColor("accent", theme), theme.accent);
   assert.equal(detailToneColor("accentSubtle", theme), theme.accentSubtle);
+  assert.equal(detailToneColor("divider", theme), theme.divider);
+  assert.equal(detailToneColor("action", theme), theme.textPrimary);
   assert.equal(feedbackColor("error", theme), theme.error);
   assert.equal(feedbackColor("loading", theme), theme.info);
   const dirty = projectState(1);
   const detail = detailLines(dirty, -1);
+  assert.ok(detail.rows[0]!.spans?.some(span => span.tone === "title" && span.strong));
+  assert.ok(detail.rows.some(row => row.surface === "alt" && row.spans?.some(span => span.tone === "divider")));
   assert.ok(detail.rows.some(row => row.text.includes("Dirty") && row.spans?.some(span => span.tone === "warn")));
   dirty.project.nextAction = "Review PR";
-  assert.ok(detailLines(dirty, -1).rows.some(row => row.tone === "accent" && row.text.includes("Review PR")));
+  assert.ok(detailLines(dirty, -1).rows.some(row => row.spans?.some(span => span.tone === "action" && span.text.includes("Review PR"))));
 });
 
 test("long Unicode names clip safely in narrow navigator rows", () => {
@@ -343,11 +347,14 @@ test("wide workbench pairs local and GitHub zones with bounded rows", () => {
   state.github = { kind: "available", issues: 2, pullRequests: [] };
   const detail = detailLines(state, -1, 77, "unicode-wide", true);
   assert.ok(detail.lines.some(line => line.includes("LOCAL GIT") && line.includes("GITHUB")));
-  assert.ok(detail.lines.some(line => line.includes("Branch feature/nav") && line.includes("Issues 2 open")));
+  assert.ok(detail.lines.some(line => line.includes("Branch feature/nav") && line.includes("Available")));
+  assert.ok(detail.lines.some(line => line.includes("● Clean") && line.includes("Issues 2 open")));
   assert.ok(detail.lines.every(line => measureEditText(line, { widthMethod: "unicode-wide" }) <= 77));
   assert.ok(detail.rows.some(row => row.spans?.some(span => span.tone === "good")));
   const compact = detailLines(state, -1, 42, "unicode-wide", false);
   assert.ok(compact.lines.findIndex(line => line.includes("LOCAL GIT")) < compact.lines.findIndex(line => line.includes("GITHUB")));
+  state.project.name = "A very long project identity with 界界 and a final identifier";
+  assert.ok(measureEditText(detailLines(state, -1, 42, "unicode-wide").lines[0]!, { widthMethod: "unicode-wide" }) <= 42);
 });
 
 test("long Unicode detail and PR entries wrap within compact width", () => {
