@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { measureEditText } from "@opentui/core";
 import { ProjectActions } from "../src/actions.js";
-import { clampSelection, dashboardLayout, detailLines, detailToneColor, detailViewport, feedbackColor, feedbackForSelection, fitBranch, fitLine, isProjectActionKey, moveProjectSelection, moveSelection, navigatorContent, navigatorEntry, navigatorHeadingHeight, navigatorHeadingText, navigatorRow, navigatorView, nextPrSelection, projectActionForKey, projectLoadNotice, radarContent, radarSummary, scrollToLine, shortcutFooter, visibleWindow } from "../src/ui.js";
+import { clampSelection, dashboardLayout, detailLines, detailToneColor, detailViewport, feedbackColor, feedbackForSelection, fitBranch, fitLine, isProjectActionKey, moveProjectSelection, moveSelection, navigatorContent, navigatorEntry, navigatorHeadingHeight, navigatorHeadingText, navigatorRow, navigatorView, nextPrSelection, projectActionForKey, projectLoadNotice, radarContent, radarSummary, scrollToLine, scrollToSelectedPr, shortcutFooter, visibleWindow } from "../src/ui.js";
 import { resolveTheme } from "../src/theme.js";
 import type { ProjectState } from "../src/domain.js";
 
@@ -52,7 +52,8 @@ test("selected PR stays in details while loading and stale remote state remains 
   const loading = detailLines(state, 0);
   assert.match(loading.lines.join("\n"), /Loading · previous data below/);
   assert.match(loading.lines[loading.selectedLine]!, /▌ #9 \[open\] Layout/);
-  assert.match(loading.lines.join("\n"), /SELECTED PR #9 · open · previous data/);
+  assert.match(loading.lines[loading.selectedLine + 1]!, /Review .+ \(previous\)/);
+  assert.doesNotMatch(loading.lines.join("\n"), /SELECTED PR #/);
   state.github = { kind: "stale", previous, reason: "Offline" };
   assert.match(detailLines(state, 0).lines.join("\n"), /Stale · Offline.*Issues 2 open \(previous\)/s);
   state.github = { kind: "unavailable", reason: "Not configured" };
@@ -383,7 +384,7 @@ test("wide workbench pairs local and GitHub zones with bounded rows", () => {
   assert.ok(measureEditText(detailLines(state, -1, 42, "unicode-wide").lines[0]!, { widthMethod: "unicode-wide" }) <= 42);
 });
 
-test("compact PR rows and pinned selected details stay bounded at target sizes", () => {
+test("inline selected PR details stay bounded and reachable at target sizes", () => {
   const state = projectState(11);
   state.project.nextAction = "Open the very long task with 界界 and 👩‍💻 today";
   state.github = { kind: "available", issues: 4, pullRequests: Array.from({ length: 12 }, (_, index) => ({
@@ -396,17 +397,18 @@ test("compact PR rows and pinned selected details stay bounded at target sizes",
     assert.ok(view.lines.every(line => measureEditText(fitLine(line, layout.detailWidth, "unicode-wide"), { widthMethod: "unicode-wide" }) <= layout.detailWidth));
     assert.match(view.lines[view.selectedLine]!, /▌ #12 \[draft\]/);
     assert.equal(view.lines.filter(line => /Review Changes requested/.test(line)).length, 1);
-    const capacity = detailViewport(view, 0, layout.detailHeight).scrollHeight;
-    const offset = scrollToLine(0, view.selectedLine, capacity);
+    const offset = scrollToSelectedPr(view, 0, layout.detailHeight);
     const visible = detailViewport(view, offset, layout.detailHeight).rows.map(row => row.text);
     assert.ok(visible.some(line => /▌ #12 \[draft\]/.test(line)));
-    assert.ok(visible.some(line => /SELECTED PR #12 · draft/.test(line)));
+    assert.equal(view.selectedEndLine, view.selectedLine + 2);
+    assert.match(view.lines[view.selectedLine + 1]!, /Review Changes requested/);
+    assert.match(view.lines[view.selectedLine + 2]!, /Checks Pending/);
     assert.ok(visible.some(line => /Checks Pending/.test(line)));
     assert.ok(visible.every(line => measureEditText(line, { widthMethod: "unicode-wide" }) <= layout.detailWidth));
   }
 });
 
-test("PR list shows one row per PR and distinguishes open, draft, no checks and unavailable details", () => {
+test("only the selected PR expands inline with truthful review and check states", () => {
   const state = projectState(0);
   state.github = { kind: "available", issues: 1, pullRequests: [
     { number: 1, title: "Open  PR", url: "https://github.com/example/pull/1", review: null, checks: "no checks", draft: false },
@@ -414,17 +416,43 @@ test("PR list shows one row per PR and distinguishes open, draft, no checks and 
   ] };
   const open = detailLines(state, 0, 42, "unicode-wide");
   assert.match(open.lines.join("\n"), /#1 \[open\] Open  PR.*#2 \[draft\] Draft 界界 👩‍💻 e\u0301/s);
-  assert.match(open.lines.join("\n"), /SELECTED PR #1 · open.*Review unavailable.*Checks no checks/s);
+  assert.match(open.lines[open.selectedLine + 1]!, /Review unavailable/);
+  assert.match(open.lines[open.selectedLine + 2]!, /Checks no checks/);
+  assert.equal(open.lines.findIndex(line => line.includes("#2 [draft]")), open.selectedLine + 3);
   assert.equal(open.lines.filter(line => /Review /.test(line)).length, 1);
   const draft = detailLines(state, 1, 42, "unicode-wide");
-  assert.match(draft.lines.join("\n"), /SELECTED PR #2 · draft.*Review REVIEW_REQUIRED.*Checks unavailable/s);
-  const tiny = detailViewport(draft, draft.selectedContextStart!, 2);
-  assert.equal(tiny.scrollHeight, 2);
-  assert.ok(tiny.rows.some(row => row.text.includes("SELECTED PR #2")));
-  assert.ok(detailViewport(draft, draft.selectedContextStart! + 1, 2).rows.some(row => row.text.includes("Checks unavailable")));
-  assert.equal(detailLines(state, -1, 42).selectedContextStart, undefined);
+  assert.match(draft.lines[draft.selectedLine + 1]!, /Review REVIEW_REQUIRED/);
+  assert.match(draft.lines[draft.selectedLine + 2]!, /Checks unavailable/);
+  assert.equal(draft.lines.findIndex(line => line.includes("#1 [open]")), draft.selectedLine - 1);
+  const tinyOffset = scrollToSelectedPr(draft, 0, 2);
+  assert.ok(detailViewport(draft, tinyOffset, 2).rows.some(row => row.text.includes("#2 [draft]")));
+  assert.ok(detailViewport(draft, tinyOffset + 1, 2).rows.some(row => row.text.includes("Checks unavailable")));
+  assert.equal(detailLines(state, -1, 42).selectedEndLine, undefined);
   state.github = { kind: "available", issues: 1, pullRequests: [] };
   assert.doesNotMatch(detailLines(state, -1, 42).lines.join("\n"), /SELECTED PR|PULL REQUESTS/);
+});
+
+test("PR cycling scrolls the expanded item without unnecessary viewport jumps", () => {
+  const state = projectState(0);
+  state.github = { kind: "available", issues: 0, pullRequests: Array.from({ length: 8 }, (_, index) => ({
+    number: index + 1, title: `PR ${index + 1}`, url: `https://github.com/example/pull/${index + 1}`,
+    review: "Ready", checks: "no checks", draft: false,
+  })) };
+  let selected = -1;
+  let offset = 0;
+  for (let press = 0; press < 9; press++) {
+    selected = nextPrSelection(selected, 8);
+    const view = detailLines(state, selected, 42);
+    const next = scrollToSelectedPr(view, offset, 5);
+    const visible = detailViewport(view, next, 5);
+    assert.ok(visible.rows.some(row => row.text.includes(`▌ #${selected + 1} [open]`)));
+    assert.ok(visible.rows.some(row => row.text.includes("Checks no checks")));
+    assert.equal(scrollToSelectedPr(view, next, 5), next);
+    offset = next;
+  }
+  assert.equal(selected, 0);
+  const view = detailLines(state, 0, 42);
+  assert.ok(detailViewport(view, scrollToSelectedPr(view, 100, 1), 1).rows[0]!.text.includes("▌ #1 [open]"));
 });
 
 test("PR title clipping preserves graphemes and markers without overflow", () => {

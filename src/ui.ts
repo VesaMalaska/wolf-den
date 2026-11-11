@@ -224,7 +224,7 @@ export function dashboardLayout(width: number, height: number, projectCount: num
 type DetailTone = "heading" | "divider" | "accent" | "accentSubtle" | "action" | "title" | "muted" | "normal" | "good" | "warn" | "error" | "unavailable" | "selected";
 type DetailSpan = { text: string; tone: DetailTone; strong?: boolean };
 type DetailRow = { text: string; tone: DetailTone; spans?: DetailSpan[]; surface?: "alt" };
-type DetailView = { lines: string[]; rows: DetailRow[]; selectedLine: number; selectedContextStart?: number };
+type DetailView = { lines: string[]; rows: DetailRow[]; selectedLine: number; selectedEndLine?: number };
 
 function boxEdge(label: string, width: number, bottom = false, widthMethod: WidthMethod = "unicode"): string {
   if (width < 4) return fitLine(label, width, widthMethod);
@@ -339,7 +339,7 @@ export function detailLines(state: ProjectState | undefined, selectedPr: number,
     }
   }
   let selectedLine = 0;
-  let selectedContextStart: number | undefined;
+  let selectedEndLine: number | undefined;
   if (data?.pullRequests.length) {
     add("", "muted");
     if (width >= 50) addSpans(boxTopSpans(`PULL REQUESTS (${data.pullRequests.length})`, width, widthMethod));
@@ -347,27 +347,33 @@ export function detailLines(state: ProjectState | undefined, selectedPr: number,
     data.pullRequests.forEach((pr, index) => {
       if (index === selectedPr) selectedLine = rows.length;
       add(prRow(pr, index === selectedPr, width, widthMethod), index === selectedPr ? "selected" : "normal");
+      if (index === selectedPr) {
+        const previous = remote.kind === "available" ? "" : " (previous)";
+        const detail = (label: string, value: string | null) => {
+          const content = fitLine(`      ${label} ${safeText(value ?? "unavailable")}${previous}`, Math.max(0, width - (width >= 50 ? 4 : 0)), widthMethod);
+          add(width >= 50 ? boxBody(content, width, widthMethod) : content, value === null ? "unavailable" : "muted", "alt");
+        };
+        detail("Review", pr.review);
+        detail("Checks", pr.checks);
+        selectedEndLine = rows.length - 1;
+      }
     });
     if (width >= 50) add(boxEdge("", width, true, widthMethod), "divider");
-    const chosen = data.pullRequests[selectedPr];
-    if (chosen) {
-      selectedContextStart = rows.length;
-      const previous = remote.kind !== "available" ? " · previous data" : "";
-      add(fitLine(`  SELECTED PR #${chosen.number} · ${chosen.draft ? "draft" : "open"}${previous}`, width, widthMethod), "heading", "alt");
-      add(fitLine(`  Review ${safeText(chosen.review ?? "unavailable")}`, width, widthMethod), chosen.review ? "normal" : "unavailable", "alt");
-      add(fitLine(`  Checks ${safeText(chosen.checks ?? "unavailable")}`, width, widthMethod), chosen.checks ? "normal" : "unavailable", "alt");
-    }
   }
-  return { lines: rows.map(row => row.text), rows, selectedLine, selectedContextStart };
+  return { lines: rows.map(row => row.text), rows, selectedLine, selectedEndLine };
 }
 
-export function detailViewport(view: DetailView, offset: number, height: number): { rows: DetailRow[]; offset: number; scrollHeight: number } {
-  const context = view.selectedContextStart === undefined ? [] : view.rows.slice(view.selectedContextStart);
-  const pinned = context.length && height >= 4 ? context : [];
-  const scrollHeight = Math.max(0, height - pinned.length);
-  const main = pinned.length ? view.rows.slice(0, view.selectedContextStart) : view.rows;
-  const start = Math.max(0, Math.min(offset, Math.max(0, main.length - scrollHeight)));
-  return { rows: [...main.slice(start, start + scrollHeight), ...pinned], offset: start, scrollHeight };
+export function detailViewport(view: DetailView, offset: number, height: number): { rows: DetailRow[]; offset: number } {
+  const start = Math.max(0, Math.min(offset, Math.max(0, view.rows.length - height)));
+  return { rows: view.rows.slice(start, start + height), offset: start };
+}
+
+export function scrollToSelectedPr(view: DetailView, offset: number, height: number): number {
+  if (view.selectedEndLine === undefined) return offset;
+  const last = Math.min(view.selectedEndLine, view.selectedLine + Math.max(0, height - 1));
+  if (view.selectedLine < offset) return view.selectedLine;
+  if (last >= offset + height) return last - height + 1;
+  return offset;
 }
 
 export function shortcutFooter(width: number, help: boolean, state: ProjectState | undefined, selectedPr: number, widthMethod: WidthMethod = "unicode"): string {
@@ -547,8 +553,7 @@ export async function runDashboard(): Promise<void> {
       selectedPr = nextPrSelection(selectedPr, data.pullRequests.length);
       const dimensions = dashboardLayout(renderer.terminalWidth, renderer.terminalHeight, states.length);
       const selectedView = detailLines(state, selectedPr, dimensions.detailWidth, renderer.widthMethod, dimensions.wide);
-      const scrollHeight = detailViewport(selectedView, detailOffset, dimensions.detailHeight).scrollHeight;
-      detailOffset = scrollToLine(detailOffset, selectedView.selectedLine, scrollHeight);
+      detailOffset = scrollToSelectedPr(selectedView, detailOffset, dimensions.detailHeight);
       feedback = { kind: "info", text: `Selected PR #${data.pullRequests[selectedPr]!.number}.`, projectId: state!.project.id };
       render(); return;
     }
@@ -582,7 +587,14 @@ export async function runDashboard(): Promise<void> {
     render();
   };
   renderer.keyInput.on("keypress", onKey);
-  renderer.on("resize", render);
+  const onResize = () => {
+    if (!showingHelp && selectedPr >= 0) {
+      const dimensions = dashboardLayout(renderer.terminalWidth, renderer.terminalHeight, states.length);
+      detailOffset = scrollToSelectedPr(detailLines(states[selected], selectedPr, dimensions.detailWidth, renderer.widthMethod, dimensions.wide), detailOffset, dimensions.detailHeight);
+    }
+    render();
+  };
+  renderer.on("resize", onResize);
   const onRendererError = () => {
     if (!destroyed) {
       renderer.destroy();
@@ -595,7 +607,7 @@ export async function runDashboard(): Promise<void> {
   renderer.once("destroy", () => {
     destroyed = true;
     renderer.keyInput.off("keypress", onKey);
-    renderer.off("resize", render);
+    renderer.off("resize", onResize);
     renderer.off("render:error", onRendererError);
     renderer.off("handler:error", onRendererError);
   });
