@@ -2,8 +2,10 @@ import { BoxRenderable, TextRenderable, StyledText, bg, bold, fg, createCliRende
 import { ProjectActions } from "./actions.js";
 import type { GithubPullRequest, ProjectState } from "./domain.js";
 import { GithubRefresh, loadProjectStates } from "./projects.js";
-import { loadConfiguration, RegistryError } from "./registry.js";
-import { resolveTheme, type SemanticTheme } from "./theme.js";
+import { defaultRegistryPath, loadConfiguration, RegistryError } from "./registry.js";
+import { RegistryPersistence } from "./registry-persistence.js";
+import { SettingsSession, settingsControls } from "./settings.js";
+import { resolveTheme, themeLabels, themeTokens, type SemanticTheme, type ThemeToken } from "./theme.js";
 
 function safeText(value: string): string { return value.replace(/[\x00-\x1f\x7f-\x9f]/g, " "); }
 
@@ -381,9 +383,9 @@ export function shortcutFooter(width: number, help: boolean, state: ProjectState
   const hasPrs = !!available?.pullRequests.length;
   const selected = !!available && selectedPr >= 0 && selectedPr < available.pullRequests.length;
   const hints = help ? ["? close help", "q quit", "PgUp/PgDn scroll", "↑/↓ project"]
-    : !state ? ["? help", "q quit"]
-    : selected ? ["? help", "q quit", "p open PR", "Tab next PR", "↑/↓ project", "PgUp/PgDn scroll", "f files", "e editor", "t terminal", "g repo", "r refresh"]
-      : ["? help", "q quit", "↑/↓ project", ...(hasPrs ? ["Tab select PR"] : []), "f files", "e editor", "t terminal", ...(state?.project.repository ? ["g repo", "r refresh"] : []), "PgUp/PgDn scroll"];
+    : !state ? ["? help", "q quit", "s settings"]
+    : selected ? ["? help", "q quit", "s settings", "p open PR", "Tab next PR", "↑/↓ project", "PgUp/PgDn scroll", "f files", "e editor", "t terminal", "g repo", "r refresh"]
+      : ["? help", "q quit", "s settings", "↑/↓ project", ...(hasPrs ? ["Tab select PR"] : []), "f files", "e editor", "t terminal", ...(state?.project.repository ? ["g repo", "r refresh"] : []), "PgUp/PgDn scroll"];
   const measure = (value: string) => measureEditText(value, { widthMethod });
   if (width < measure("? help · q quit")) return width >= measure("? q") ? "? q" : fitLine("?", width, widthMethod);
   const shown: string[] = [];
@@ -454,7 +456,36 @@ export function projectActionForKey(key: ProjectActionKey, actions: ProjectActio
   }
 }
 
-export async function runDashboard(): Promise<void> {
+export function settingsLayout(width: number, height: number) {
+  const columns = Math.max(1, width);
+  const rows = Math.max(3, height);
+  const wide = columns >= 88;
+  const contentHeight = rows - 3;
+  const navigatorWidth = wide ? 19 : columns;
+  const navigatorHeight = wide ? contentHeight : Math.min(2, contentHeight);
+  const dividerWidth = wide ? 1 : columns;
+  const dividerHeight = wide ? contentHeight : Math.min(1, contentHeight - navigatorHeight);
+  const detailWidth = wide ? columns - navigatorWidth - dividerWidth : columns;
+  const detailHeight = contentHeight - (wide ? 0 : navigatorHeight + dividerHeight);
+  return { columns, wide, contentHeight, navigatorWidth, navigatorHeight, dividerWidth, dividerHeight, detailWidth, detailHeight };
+}
+
+export function settingsRows(session: SettingsSession): { text: string; color: string }[] {
+  return settingsControls.map(control => {
+    if (control === "preset") return { text: `Theme preset  ${themeLabels[session.themeId]}`, color: session.theme.heading };
+    if (themeTokens.includes(control as ThemeToken)) {
+      const token = control as ThemeToken;
+      const current = session.editing?.token === token ? session.editing.value : session.theme[token];
+      const source = session.overrides[token] === undefined ? "preset" : "override";
+      return { text: `${token}  ${current}  ${source}`, color: session.theme.textPrimary };
+    }
+    if (control === "terminal") return { text: `Terminal  ${session.terminal}${session.terminal === "system" ? " (platform selection)" : ""}`, color: session.theme.info };
+    const actions: Record<"save" | "reset" | "cancel" | "reload", string> = { save: "Save settings", reset: "Reset appearance to preset", cancel: "Cancel / return to cockpit", reload: "Reload registry from disk" };
+    return { text: actions[control as keyof typeof actions], color: session.theme.textSecondary };
+  });
+}
+
+export async function runDashboard(registryPath = defaultRegistryPath()): Promise<void> {
   let theme = resolveTheme();
   const renderer = await createCliRenderer({ exitOnCtrlC: true, backgroundColor: theme.background });
   let destroyed = false;
@@ -469,6 +500,13 @@ export async function runDashboard(): Promise<void> {
   let detailOffset = 0;
   const refresh = new GithubRefresh();
   let actions: ProjectActions | undefined;
+  const persistence = new RegistryPersistence(registryPath);
+  let settings: SettingsSession | null = null;
+  let settingsLoading = false;
+  let settingsOpeningId = 0;
+  let settingsHelp = false;
+  let settingsOffset = 0;
+  let activeTheme = theme;
   const layout = new BoxRenderable(renderer, { flexDirection: "column", gap: 0, width: "100%", height: "100%", backgroundColor: theme.background });
   const title = new TextRenderable(renderer, { content: "Wolf Den", fg: theme.heading });
   const panels = new BoxRenderable(renderer, { flexDirection: "row", gap: 0, width: "100%", backgroundColor: theme.panel });
@@ -492,8 +530,79 @@ export async function runDashboard(): Promise<void> {
   layout.add(footer);
   renderer.root.add(layout);
 
+  const applyTheme = (next: SemanticTheme) => {
+    theme = next;
+    renderer.setBackgroundColor(theme.background);
+    layout.backgroundColor = theme.background;
+    panels.backgroundColor = theme.panel;
+    title.fg = theme.heading;
+    listPanel.backgroundColor = theme.panel;
+    listHeading.fg = theme.heading;
+    list.fg = theme.textPrimary;
+    listSummary.fg = theme.textSecondary;
+    divider.fg = theme.divider;
+    detail.fg = theme.textSecondary;
+    message.bg = theme.panelAlt;
+    footer.fg = theme.textMuted;
+  };
+
+  const renderSettings = () => {
+    const dimensions = settingsLayout(renderer.terminalWidth, renderer.terminalHeight);
+    panels.flexDirection = dimensions.wide ? "row" : "column";
+    title.height = 1; panels.height = dimensions.contentHeight;
+    listPanel.width = dimensions.navigatorWidth; listPanel.height = dimensions.navigatorHeight;
+    listHeading.width = dimensions.navigatorWidth; listHeading.height = dimensions.wide ? 2 : 1;
+    list.width = dimensions.navigatorWidth; list.height = Math.max(0, dimensions.navigatorHeight - (dimensions.wide ? 2 : 1));
+    listSummary.width = dimensions.navigatorWidth; listSummary.height = 0;
+    divider.width = dimensions.dividerWidth; divider.height = dimensions.dividerHeight;
+    detail.width = dimensions.detailWidth; detail.height = dimensions.detailHeight;
+    message.height = 1; footer.height = 1;
+    const session = settings;
+    title.content = fitLine(`🐺 Wolf Den / Settings${session?.dirty ? " · Unsaved" : ""}`, dimensions.columns, renderer.widthMethod);
+    const section = session && session.focus >= 19 ? "General" : "Appearance";
+    listHeading.content = dimensions.wide ? "SECTIONS\n" : `SECTIONS · ${section}`;
+    list.content = dimensions.wide ? `  ${section === "Appearance" ? "▌" : " "} Appearance\n  ${section === "General" ? "▌" : " "} General` : `← Appearance   General →`;
+    listSummary.content = "";
+    divider.content = dimensions.wide ? Array(dimensions.dividerHeight).fill("│").join("\n") : "─".repeat(dimensions.dividerWidth);
+    if (!session) {
+      detail.content = settingsLoading ? "Loading Settings…" : "Settings unavailable. Esc returns to the cockpit.";
+      message.fg = theme.info; message.content = "· Opening registry snapshot…";
+    } else {
+      const sample = [
+        fg(theme.heading)("PREVIEW  "),
+        fg(theme.textOnSelection)(bg(theme.selectionBackground)("▌focus")),
+        fg(theme.success)("  ✓ clean"),
+        fg(theme.attention)("  ! alert"),
+      ];
+      const intro = session.editing ? `EDIT ${session.editing.token}: ${session.editing.value}█` : session.confirmation ? `CONFIRM ${session.confirmation.toUpperCase()} · Enter yes · Esc no` : `APPEARANCE · GENERAL  ${session.dirty ? "● Unsaved changes" : "Saved"}`;
+      const available = Math.max(0, dimensions.detailHeight - 2);
+      const rows = settingsHelp
+        ? ["SETTINGS HELP", "↑/↓ controls · ←/→ sections", "Enter edit/select/confirm", "Color: type #RRGGBB · Backspace", "Enter accept · Esc cancel edit", "Esc with changes: confirm discard", "Save writes registry · Reset previews", "Reload reads external edits", "? close help · Ctrl+C quit"]
+        : settingsRows(session).map(row => row.text);
+      if (!settingsHelp) settingsOffset = scrollToLine(settingsOffset, session.focus, available);
+      else settingsOffset = Math.min(settingsOffset, Math.max(0, rows.length - available));
+      const visibleRows = rows.slice(settingsOffset, settingsOffset + available);
+      const paletteRows = settingsHelp ? [] : settingsRows(session);
+      detail.content = new StyledText([
+        fg(theme.heading)(fitLine(intro, dimensions.detailWidth, renderer.widthMethod) + "\n"),
+        ...sample, ...(visibleRows.length ? [fg(theme.textMuted)("\n")] : []),
+        ...visibleRows.flatMap((line, index) => {
+          const focused = !settingsHelp && settingsOffset + index === session.focus;
+          const content = fitLine((focused ? "▌ " : "  ") + line, dimensions.detailWidth, renderer.widthMethod);
+          const color = focused ? theme.textOnSelection : paletteRows[settingsOffset + index]?.color ?? theme.textSecondary;
+          const styled = fg(color)(focused ? bg(theme.selectionBackground)(content) : content);
+          return index === visibleRows.length - 1 ? [styled] : [styled, fg(theme.textMuted)("\n")];
+        }),
+      ]);
+      message.fg = session.error ? theme.error : theme.info;
+      message.content = fitLine(`${session.error ? "!" : "·"} ${session.message}`, dimensions.columns, renderer.widthMethod);
+    }
+    footer.content = fitLine(settingsHelp ? "? close help · Esc back" : "↑↓ controls · ←→ sections · Enter choose · ? help · Esc back", dimensions.columns, renderer.widthMethod);
+  };
+
   const render = () => {
     if (destroyed) return;
+    if (settings || settingsLoading) { renderSettings(); return; }
     const dimensions = dashboardLayout(renderer.terminalWidth, renderer.terminalHeight, states.length);
     panels.flexDirection = dimensions.wide ? "row" : "column";
     title.height = dimensions.headerHeight;
@@ -516,7 +625,7 @@ export async function runDashboard(): Promise<void> {
     listSummary.content = dimensions.radarHeight ? radarContent(states, dimensions.navigatorWidth, renderer.widthMethod, theme) : "";
     divider.content = dimensions.wide ? Array(dimensions.dividerHeight).fill("│").join("\n") : "─".repeat(dimensions.dividerWidth);
     const view = showingHelp
-      ? { lines: ["Keyboard shortcuts", "↑/↓  Select project", "Tab  Select next PR", "e  Open project in VS Code", "t  Open terminal in project", "f  Open project in file manager", "g  Open GitHub repository", "p  Open selected PR", "r  Refresh selected project's GitHub data", "PgUp/PgDn  Scroll details", "?  Close help", "q / Esc / Ctrl+C  Quit"], selectedLine: 0 }
+      ? { lines: ["Keyboard shortcuts", "↑/↓  Select project", "Tab  Select next PR", "s  Open Settings", "e  Open project in VS Code", "t  Open terminal in project", "f  Open project in file manager", "g  Open GitHub repository", "p  Open selected PR", "r  Refresh selected project's GitHub data", "PgUp/PgDn  Scroll details", "?  Close help", "q / Esc / Ctrl+C  Quit"], selectedLine: 0 }
       : registryLoaded ? detailLines(states[selected], selectedPr, dimensions.detailWidth, renderer.widthMethod, dimensions.wide) : { lines: [feedback.text], selectedLine: 0 };
     const visible = "rows" in view && view.rows ? detailViewport(view, detailOffset, dimensions.detailHeight) : undefined;
     detailOffset = visible?.offset ?? Math.min(detailOffset, Math.max(0, view.lines.length - dimensions.detailHeight));
@@ -542,6 +651,82 @@ export async function runDashboard(): Promise<void> {
     footer.content = shortcutFooter(dimensions.columns, showingHelp, states[selected], selectedPr, renderer.widthMethod);
   };
   const onKey = (key: KeyEvent) => {
+    if (settingsLoading) {
+      if (key.name === "escape") { settingsOpeningId++; settingsLoading = false; render(); }
+      return;
+    }
+    if (settings) {
+      const session = settings;
+      if (session.busy) return;
+      if (session.editing) {
+        if (key.name === "escape") session.cancelEdit();
+        else if (key.name === "return" || key.name === "enter") session.acceptEdit();
+        else session.input(key.name);
+        applyTheme(session.theme); render(); return;
+      }
+      if (session.confirmation) {
+        if (key.name === "escape") { session.cancelConfirmation(); render(); return; }
+        if (key.name === "return" || key.name === "enter") {
+          void session.confirm().then(result => {
+            if (destroyed || settings !== session) return;
+            if (result === "exit") { settings = null; settingsHelp = false; applyTheme(activeTheme); }
+            else applyTheme(session.theme);
+            render();
+          });
+        }
+        return;
+      }
+      if (key.name === "?") { settingsHelp = !settingsHelp; settingsOffset = 0; render(); return; }
+      if (settingsHelp) {
+        if (key.name === "escape") { settingsHelp = false; render(); }
+        else if (key.name === "pageup" || key.name === "pagedown") { settingsOffset = Math.max(0, settingsOffset + (key.name === "pageup" ? -5 : 5)); render(); }
+        return;
+      }
+      if (key.name === "escape") {
+        if (session.requestExit()) { settings = null; applyTheme(activeTheme); }
+        render(); return;
+      }
+      if (key.name === "up" || key.name === "down" || key.name === "left" || key.name === "right") {
+        session.move(key.name); render(); return;
+      }
+      if (key.name === "pageup" || key.name === "pagedown") {
+        for (let index = 0; index < 5; index++) session.move(key.name === "pageup" ? "up" : "down");
+        render(); return;
+      }
+      if (key.name !== "return" && key.name !== "enter") return;
+      if (session.control === "preset") session.cyclePreset();
+      else if (themeTokens.includes(session.control as ThemeToken)) session.startEdit();
+      else if (session.control === "terminal") session.cycleTerminal();
+      else if (session.control === "reset") session.requestReset();
+      else if (session.control === "reload") session.requestReload();
+      else if (session.control === "cancel") {
+        if (session.requestExit()) { settings = null; applyTheme(activeTheme); }
+      } else if (session.control === "save") {
+        void session.save().then(saved => {
+          if (destroyed || settings !== session) return;
+          if (saved) { activeTheme = session.theme; actions = new ProjectActions(undefined, undefined, session.terminal); }
+          applyTheme(session.theme); render();
+        });
+      }
+      applyTheme(settings?.theme ?? activeTheme); render(); return;
+    }
+    if (key.name === "s" && registryLoaded) {
+      const openingId = ++settingsOpeningId;
+      settingsLoading = true; render();
+      void persistence.load().then(snapshot => {
+        if (destroyed || !settingsLoading || settingsOpeningId !== openingId) return;
+        settings = new SettingsSession(snapshot, persistence);
+        settingsLoading = false; settingsOffset = 0; settingsHelp = false;
+        applyTheme(settings.theme);
+        render();
+      }).catch((error: unknown) => {
+        if (destroyed || !settingsLoading || settingsOpeningId !== openingId) return;
+        settingsLoading = false;
+        feedback = { kind: "error", text: error instanceof Error ? safeText(error.message) : "Could not open Settings." };
+        render();
+      });
+      return;
+    }
     if (key.name === "q" || key.name === "escape") { renderer.destroy(); return; }
     if (key.name === "?") { showingHelp = !showingHelp; detailOffset = 0; render(); return; }
     if (key.name === "pageup" || key.name === "pagedown") { detailOffset = Math.max(0, detailOffset + (key.name === "pageup" ? -5 : 5)); render(); return; }
@@ -588,7 +773,7 @@ export async function runDashboard(): Promise<void> {
   };
   renderer.keyInput.on("keypress", onKey);
   const onResize = () => {
-    if (!showingHelp && selectedPr >= 0) {
+    if (!settings && !settingsLoading && !showingHelp && selectedPr >= 0) {
       const dimensions = dashboardLayout(renderer.terminalWidth, renderer.terminalHeight, states.length);
       detailOffset = scrollToSelectedPr(detailLines(states[selected], selectedPr, dimensions.detailWidth, renderer.widthMethod, dimensions.wide), detailOffset, dimensions.detailHeight);
     }
@@ -614,21 +799,10 @@ export async function runDashboard(): Promise<void> {
   render();
 
   try {
-    const configuration = await loadConfiguration();
+    const configuration = await loadConfiguration(registryPath);
     if (destroyed) return;
-    theme = resolveTheme(configuration.settings.theme, configuration.settings.themeOverrides);
-    renderer.setBackgroundColor(theme.background);
-    layout.backgroundColor = theme.background;
-    panels.backgroundColor = theme.panel;
-    title.fg = theme.heading;
-    listPanel.backgroundColor = theme.panel;
-    listHeading.fg = theme.heading;
-    list.fg = theme.textPrimary;
-    listSummary.fg = theme.textSecondary;
-    divider.fg = theme.divider;
-    detail.fg = theme.textSecondary;
-    message.bg = theme.panelAlt;
-    footer.fg = theme.textMuted;
+    activeTheme = resolveTheme(configuration.settings.theme, configuration.settings.themeOverrides);
+    applyTheme(activeTheme);
     actions = new ProjectActions(undefined, undefined, configuration.settings.terminal);
     const projects = configuration.projects;
     registryLoaded = true;
