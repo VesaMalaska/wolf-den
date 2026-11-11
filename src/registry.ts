@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { z } from "zod";
-import type { Project, TerminalPreference } from "./domain.js";
+import { terminalPreferences, type Project, type TerminalPreference } from "./domain.js";
 import { defaultThemeId, rgbColorPattern, themeIds, themeTokens, type ThemeId, type ThemeToken } from "./theme.js";
 
 const projectSchema = z.strictObject({
@@ -14,7 +14,7 @@ const projectSchema = z.strictObject({
   nextAction: z.string().refine(value => value.trim().length > 0, "Next action cannot be blank.").optional(),
 });
 const settingsSchema = z.strictObject({
-  terminal: z.enum(["system", "kitty", "konsole", "gnome-terminal", "xfce4-terminal", "alacritty", "xterm"]).optional(),
+  terminal: z.enum(terminalPreferences).optional(),
   theme: z.enum(themeIds, { error: `Choose a supported theme: ${themeIds.join(", ")}.` }).optional(),
   themeOverrides: z.partialRecord(z.enum(themeTokens), z.string().regex(rgbColorPattern, "Use a hexadecimal RGB color in #RRGGBB format.")).optional(),
 });

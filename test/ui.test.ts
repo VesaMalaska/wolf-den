@@ -493,7 +493,7 @@ test("footer uses complete relevant hints at each target width", () => {
   state.github = { kind: "stale", previous: { kind: "available", issues: 0, pullRequests: [{ number: 1, title: "A", url: "https://github.com/example/repo/pull/1", review: null, checks: null, draft: false }] }, reason: "Offline" };
   assert.doesNotMatch(shortcutFooter(120, false, state, 0), /p open PR|Tab select PR/);
   assert.equal(shortcutFooter(3, false, state, -1), "? q");
-  assert.equal(shortcutFooter(120, false, undefined, -1), "? help · q quit");
+  assert.equal(shortcutFooter(120, false, undefined, -1), "? help · q quit · s settings");
 });
 
 test("delayed feedback is attributed to its project", () => {
