@@ -20,7 +20,7 @@ export class SettingsSession {
   focus = 0;
   editing: { token: ThemeToken; value: string; original: string | undefined } | null = null;
   confirmation: Confirmation = null;
-  message = "Choose a control with arrows; Enter edits or activates.";
+  message = "Changes preview immediately. Save keeps them.";
   error = false;
   busy = false;
   private saved: Draft;
@@ -37,15 +37,6 @@ export class SettingsSession {
   get terminal(): TerminalPreference { return this.draft.terminal; }
   get overrides(): Readonly<Partial<Record<ThemeToken, string>>> { return this.draft.overrides; }
   get control(): SettingsControl { return settingsControls[this.focus]!; }
-
-  move(direction: "up" | "down" | "left" | "right"): void {
-    if (this.editing || this.busy) return;
-    this.confirmation = null;
-    this.focus = direction === "left" ? 0 : direction === "right" ? 19
-      : Math.max(0, Math.min(settingsControls.length - 1, this.focus + (direction === "up" ? -1 : 1)));
-    this.message = "Enter edits or activates the selected control.";
-    this.error = false;
-  }
 
   startEdit(): void {
     const token = this.control;

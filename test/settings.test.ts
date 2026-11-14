@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { RegistryPersistence } from "../src/registry-persistence.js";
 import { SettingsSession, settingsControls } from "../src/settings.js";
 import { defaultThemeId, themePresets, themeTokens } from "../src/theme.js";
-import { settingsLayout, settingsRows, scrollToLine } from "../src/ui.js";
+import { colorGroups } from "../src/settings-view.js";
 
 async function fixture(settings: object = {}) {
   const directory = await mkdtemp(join(tmpdir(), "wolf-den-settings-"));
@@ -35,11 +35,6 @@ test("Settings controls cover the typed preset, all 18 colors, terminal, and act
     assert.equal(f.session.themeId, defaultThemeId);
     assert.match(f.session.message, /only installed preset/);
     assert.equal(f.session.dirty, false);
-    f.session.focus = 18;
-    f.session.move("right");
-    assert.equal(f.session.control, "terminal");
-    f.session.move("left");
-    assert.equal(f.session.control, "preset");
   } finally { await rm(f.directory, { recursive: true }); }
 });
 
@@ -172,18 +167,8 @@ test("failed write keeps the draft and original registry for retry", async () =>
   } finally { await rm(f.directory, { recursive: true }); }
 });
 
-test("compact and wide Settings layouts keep a focusable scrolling list", async () => {
-  const f = await fixture();
-  try {
-    for (const [width, height] of [[120, 32], [100, 25], [80, 24], [56, 22], [42, 18]]) {
-      const layout = settingsLayout(width!, height!);
-      assert.equal(layout.contentHeight + 3, height);
-      assert.ok(layout.detailHeight >= 10);
-      assert.ok(layout.detailWidth >= 42 || layout.wide);
-      const visible = layout.detailHeight - 2;
-      const offset = scrollToLine(0, 23, visible);
-      assert.ok(23 >= offset && 23 < offset + visible);
-      assert.equal(settingsRows(f.session).length, settingsControls.length);
-    }
-  } finally { await rm(f.directory, { recursive: true }); }
+test("Colors groups include every semantic token exactly once", () => {
+  const tokens = colorGroups.flatMap(group => [...group.tokens]);
+  assert.equal(tokens.length, 18);
+  assert.deepEqual([...tokens].sort(), [...themeTokens].sort());
 });
