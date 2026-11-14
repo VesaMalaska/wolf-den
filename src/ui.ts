@@ -1,12 +1,15 @@
 import { BoxRenderable, TextRenderable, StyledText, bg, bold, fg, createCliRenderer, measureEditText, type KeyEvent, type WidthMethod } from "@opentui/core";
 import { ProjectActions } from "./actions.js";
 import type { GithubPullRequest, ProjectState } from "./domain.js";
-import { GithubRefresh, loadProjectStates } from "./projects.js";
-import { defaultRegistryPath, loadConfiguration, RegistryError } from "./registry.js";
+import { GithubRefresh, loadProjectStates, reconcileProjectStates, retainedProjectId } from "./projects.js";
+import { defaultRegistryPath, loadConfiguration, parseConfiguration, RegistryError, type RegistryConfiguration } from "./registry.js";
 import { RegistryPersistence } from "./registry-persistence.js";
 import { SettingsSession } from "./settings.js";
 import { SettingsNavigation, SettingsView } from "./settings-view.js";
 import { resolveTheme, themeTokens, type SemanticTheme, type ThemeToken } from "./theme.js";
+import { projectFields, type ProjectField } from "./project-registrations.js";
+import type { inspectGit } from "./git.js";
+import type { inspectGithub } from "./github.js";
 
 function safeText(value: string): string { return value.replace(/[\x00-\x1f\x7f-\x9f]/g, " "); }
 
@@ -289,7 +292,7 @@ export function detailLines(state: ProjectState | undefined, selectedPr: number,
   const rows: DetailRow[] = [];
   const add = (text: string, tone: DetailTone = "normal", surface?: "alt") => rows.push({ text, tone, surface });
   const addSpans = (spans: DetailSpan[], tone: DetailTone = "normal", surface?: "alt") => rows.push({ text: spans.map(span => span.text).join(""), tone, spans, surface });
-  if (!state) { add("  No projects configured. Add a project to the registry.", "muted"); return { lines: rows.map(row => row.text), rows, selectedLine: 0 }; }
+  if (!state) { add("  No projects registered. Press s to add your first project.", "muted"); return { lines: rows.map(row => row.text), rows, selectedLine: 0 }; }
   const identityMarker = fitLine("  ◇ ", width, widthMethod);
   addSpans([{ text: identityMarker, tone: "accentSubtle" },
     { text: fitLine(state.project.name, Math.max(0, width - measureEditText(identityMarker, { widthMethod })), widthMethod), tone: "title", strong: true }], "title");
@@ -457,7 +460,8 @@ export function projectActionForKey(key: ProjectActionKey, actions: ProjectActio
   }
 }
 
-export async function runDashboard(registryPath = defaultRegistryPath(), createRenderer = createCliRenderer): Promise<void> {
+export async function runDashboard(registryPath = defaultRegistryPath(), createRenderer = createCliRenderer,
+  providers: { git?: typeof inspectGit; github?: typeof inspectGithub } = {}): Promise<void> {
   let theme = resolveTheme();
   const renderer = await createRenderer({ exitOnCtrlC: true, backgroundColor: theme.background });
   let destroyed = false;
@@ -500,7 +504,7 @@ export async function runDashboard(registryPath = defaultRegistryPath(), createR
   layout.add(message);
   layout.add(footer);
   renderer.root.add(layout);
-  const settingsView = new SettingsView(renderer);
+  const settingsView = new SettingsView(renderer, () => render());
   renderer.root.add(settingsView.root);
 
   const applyTheme = (next: SemanticTheme) => {
@@ -574,6 +578,25 @@ export async function runDashboard(registryPath = defaultRegistryPath(), createR
     message.content = fitLine(`${labels[shown.kind]} ${shown.text}`, dimensions.columns, renderer.widthMethod);
     footer.content = shortcutFooter(dimensions.columns, showingHelp, states[selected], selectedPr, renderer.widthMethod);
   };
+  const syncConfiguration = (configuration: RegistryConfiguration) => {
+    const previous = states;
+    const selectedState = previous[selected];
+    const id = retainedProjectId(previous.map(state => state.project.id), configuration.projects.map(project => project.id), selectedState?.project.id);
+    states = reconcileProjectStates(previous, configuration.projects);
+    selected = Math.max(0, states.findIndex(state => state.project.id === id));
+    if (states[selected] !== selectedState) { selectedPr = -1; detailOffset = 0; }
+    activeTheme = resolveTheme(configuration.settings.theme, configuration.settings.themeOverrides);
+    actions = new ProjectActions(undefined, undefined, configuration.settings.terminal);
+    const pending = states.filter(state => !previous.includes(state));
+    initialLoadPending = false;
+    feedback = { kind: "success", text: projectLoadNotice("ready", states.length) };
+    // Capture actual state objects: obsolete provider callbacks cannot write into a reused index.
+    void loadProjectStates(pending.map(state => state.project), providers.git, providers.github, (result, index) => {
+      const target = pending[index];
+      if (!destroyed && target && states.includes(target)) { target.git = result.git; target.github = result.github; render(); }
+    });
+  };
+  const syncSettings = (session: SettingsSession) => syncConfiguration(parseConfiguration(JSON.stringify(session.document)));
   const onKey = (key: KeyEvent) => {
     if (settingsLoading) {
       if (key.name === "escape") { settingsOpeningId++; settingsLoading = false; render(); }
@@ -581,7 +604,25 @@ export async function runDashboard(registryPath = defaultRegistryPath(), createR
     }
     if (settings) {
       const session = settings;
+      if ((renderer.terminalWidth < 42 || renderer.terminalHeight < 18) && key.name !== "escape" && !(key.ctrl && key.name === "c")) { key.preventDefault(); return; }
       if (session.busy) return;
+      const projects = session.projects;
+      if (projects.form?.editing) {
+        if (key.name === "escape") { key.preventDefault(); projects.cancelField(); render(); }
+        else if (key.name === "return" || key.name === "enter" || key.name === "tab") {
+          key.preventDefault();
+          if (projects.acceptField() && key.name === "tab") settingsNavigation.moveForm(key.shift ? -1 : 1, session);
+          render();
+        }
+        return; // Native InputRenderable consumes all other editor keys and paste.
+      }
+      if (projects.discardingForm) {
+        if (key.name === "escape") projects.discardingForm = false;
+        else if (key.name === "return" || key.name === "enter") {
+          projects.form = null; projects.discardingForm = false; settingsNavigation.showProjects(session);
+        }
+        render(); return;
+      }
       if (session.editing) {
         if (key.name === "escape") session.cancelEdit();
         else if (key.name === "return" || key.name === "enter") session.acceptEdit();
@@ -591,10 +632,11 @@ export async function runDashboard(registryPath = defaultRegistryPath(), createR
       if (session.confirmation) {
         if (key.name === "escape") { session.cancelConfirmation(); render(); return; }
         if (key.name === "return" || key.name === "enter") {
+          const revision = session.revision;
           void session.confirm().then(result => {
             if (destroyed || settings !== session) return;
             if (result === "exit") { settings = null; settingsNavigation.help = false; applyTheme(activeTheme); }
-            else applyTheme(session.theme);
+            else { if (session.revision !== revision) syncSettings(session); applyTheme(session.theme); }
             render();
           });
         }
@@ -607,6 +649,8 @@ export async function runDashboard(registryPath = defaultRegistryPath(), createR
         return;
       }
       if (key.name === "escape") {
+        if (settingsNavigation.section === "project-remove") { projects.removingId = null; settingsNavigation.showProjects(session); render(); return; }
+        if (settingsNavigation.section === "project-form") { if (projects.closeForm()) settingsNavigation.showProjects(session); render(); return; }
         if (settingsNavigation.back(session)) { render(); return; }
         if (session.requestExit()) { settings = null; applyTheme(activeTheme); }
         render(); return;
@@ -615,12 +659,44 @@ export async function runDashboard(registryPath = defaultRegistryPath(), createR
         settingsNavigation.move(key.name, session); render(); return;
       }
       if (key.name === "pageup" || key.name === "pagedown") {
+        if (settingsNavigation.section === "project-remove") { settingsNavigation.identityOffset = Math.max(0, settingsNavigation.identityOffset + (key.name === "pageup" ? -2 : 2)); render(); return; }
         for (let index = 0; index < 5; index++) settingsNavigation.move(key.name === "pageup" ? "up" : "down", session);
         render(); return;
       }
-      if (key.name === "tab") { settingsNavigation.tab(key.shift, session); render(); return; }
+      if (key.name === "tab") {
+        if (settingsNavigation.section === "project-form" || settingsNavigation.section === "project-remove") settingsNavigation.moveForm(key.shift ? -1 : 1, session);
+        else settingsNavigation.tab(key.shift, session);
+        render(); return;
+      }
       if (key.name !== "return" && key.name !== "enter") return;
       if (settingsNavigation.control === "customize") { settingsNavigation.openColors(session); render(); return; }
+      if (settingsNavigation.section === "projects" && (settingsNavigation.control === "add-project" || settingsNavigation.control.startsWith("project:"))) {
+        projects.openForm(settingsNavigation.control === "add-project"); settingsNavigation.section = "project-form"; settingsNavigation.control = "name"; settingsNavigation.sync(session);
+        render(); return;
+      }
+      if (settingsNavigation.control === "remove-project") {
+        projects.requestRemoval(); settingsNavigation.identityOffset = 0; settingsNavigation.section = "project-remove"; settingsNavigation.control = "cancel-removal"; settingsNavigation.sync(session); render(); return;
+      }
+      if (settingsNavigation.section === "project-remove") {
+        const removed = projects.removeFocused;
+        projects.confirmRemoval(); settingsNavigation.showProjects(session);
+        session.message = removed ? "Removal is in the draft. Save to keep it." : "Removal canceled. Registration kept."; session.error = false;
+        render(); return;
+      }
+      if (settingsNavigation.section === "project-form") {
+        const control = settingsNavigation.control;
+        if (control === "cancel-project") { if (projects.closeForm()) settingsNavigation.showProjects(session); }
+        else if (control === "apply-project") {
+          void session.applyProject().then(applied => {
+            if (destroyed || settings !== session) return;
+            if (applied) settingsNavigation.showProjects(session);
+            else { settingsNavigation.control = projects.form?.field ?? "name"; settingsNavigation.sync(session); }
+            render();
+          });
+          if (!projects.form) settingsNavigation.showProjects(session);
+        } else if (projectFields.includes(control as ProjectField)) projects.startField(control as ProjectField);
+        render(); return;
+      }
       if (session.control === "preset") session.cyclePreset();
       else if (themeTokens.includes(session.control as ThemeToken)) session.startEdit();
       else if (session.control === "terminal") session.cycleTerminal();
@@ -631,7 +707,7 @@ export async function runDashboard(registryPath = defaultRegistryPath(), createR
       } else if (session.control === "save") {
         void session.save().then(saved => {
           if (destroyed || settings !== session) return;
-          if (saved) { activeTheme = session.theme; actions = new ProjectActions(undefined, undefined, session.terminal); }
+          if (saved) syncSettings(session);
           applyTheme(session.theme); render();
         });
       }
@@ -642,7 +718,7 @@ export async function runDashboard(registryPath = defaultRegistryPath(), createR
       settingsLoading = true; render();
       void persistence.load().then(snapshot => {
         if (destroyed || !settingsLoading || settingsOpeningId !== openingId) return;
-        settings = new SettingsSession(snapshot, persistence);
+        settings = new SettingsSession(snapshot, persistence, states[selected]?.project.id);
         settingsLoading = false; settingsNavigation = new SettingsNavigation();
         applyTheme(settings.theme);
         render();
@@ -675,7 +751,7 @@ export async function runDashboard(registryPath = defaultRegistryPath(), createR
       if (state.github.kind === "loading") { feedback = { kind: "loading", text: `GitHub refresh is already in progress for ${safeText(state.project.name)}.`, projectId: state.project.id }; render(); return; }
       selectedPr = -1;
       feedback = { kind: "loading", text: `Refreshing GitHub for ${safeText(state.project.name)}…`, projectId: state.project.id }; render();
-      void refresh.refresh(state, github => { if (!destroyed) { state.github = github; if (github.kind !== "loading" && states[selected]?.project.id === state.project.id) feedback = { kind: github.kind === "available" ? "success" : "unavailable", text: github.kind === "available" ? `GitHub refreshed for ${safeText(state.project.name)}.` : `GitHub ${github.kind} for ${safeText(state.project.name)}: ${safeText(github.reason)}`, projectId: state.project.id }; render(); } });
+      void refresh.refresh(state, github => { if (!destroyed && states.includes(state)) { state.github = github; if (github.kind !== "loading" && states[selected]?.project.id === state.project.id) feedback = { kind: github.kind === "available" ? "success" : "unavailable", text: github.kind === "available" ? `GitHub refreshed for ${safeText(state.project.name)}.` : `GitHub ${github.kind} for ${safeText(state.project.name)}: ${safeText(github.reason)}`, projectId: state.project.id }; render(); } });
       return;
     }
     if (isProjectActionKey(key.name)) {
@@ -684,8 +760,8 @@ export async function runDashboard(registryPath = defaultRegistryPath(), createR
       actionPending = true;
       feedback = { kind: "loading", text: `Launching action for ${safeText(state.project.name)}…`, projectId: state.project.id }; render();
       const { action, launched } = projectActionForKey(key.name, actions, state, selectedPr);
-      void action.then(() => { if (!destroyed && states[selected]?.project.id === state.project.id) { feedback = { kind: "success", text: `${launched} launched for ${safeText(state.project.name)}.`, projectId: state.project.id }; render(); } })
-        .catch((error: unknown) => { if (!destroyed && states[selected]?.project.id === state.project.id) { feedback = { kind: "error", text: `${launched} for ${safeText(state.project.name)} failed: ${error instanceof Error ? safeText(error.message) : "Action failed."}`, projectId: state.project.id }; render(); } })
+      void action.then(() => { if (!destroyed && states.includes(state) && states[selected]?.project.id === state.project.id) { feedback = { kind: "success", text: `${launched} launched for ${safeText(state.project.name)}.`, projectId: state.project.id }; render(); } })
+        .catch((error: unknown) => { if (!destroyed && states.includes(state) && states[selected]?.project.id === state.project.id) { feedback = { kind: "error", text: `${launched} for ${safeText(state.project.name)} failed: ${error instanceof Error ? safeText(error.message) : "Action failed."}`, projectId: state.project.id }; render(); } })
         .finally(() => { actionPending = false; });
       return;
     }
@@ -736,8 +812,10 @@ export async function runDashboard(registryPath = defaultRegistryPath(), createR
     states = projects.map(project => ({ project, git: { kind: "loading" }, github: project.repository ? { kind: "loading" } : { kind: "unavailable", reason: "No GitHub repository configured." } }));
     feedback = { kind: "loading", text: projectLoadNotice("loading", projects.length) };
     render();
-    states = await loadProjectStates(projects, undefined, undefined, (state, index) => {
-      if (!destroyed) { states[index] = state; render(); }
+    const initialStates = states;
+    await loadProjectStates(projects, providers.git, providers.github, (state, index) => {
+      const target = initialStates[index];
+      if (!destroyed && target && states.includes(target)) { target.git = state.git; target.github = state.github; render(); }
     });
     if (destroyed) return;
     initialLoadPending = false;
