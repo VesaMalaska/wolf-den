@@ -14,6 +14,12 @@ Wolf Den answers three questions:
 
 The next milestone will improve the cockpit's information hierarchy and project overview, introduce a customizable **Wolfy Dark** semantic color theme, add an in-app Settings view, and provide safe Add/Remove Project and direct Next Action editing. These features are **planned, not included in v0.2.0**. See the [v0.3 UX and configuration specification](docs/V0.3-UX-AND-CONFIG-SPEC.md) and [roadmap](docs/ROADMAP.md).
 
+## Future direction — automatic project status (planned)
+
+A future [Project Status Contract & Discovery initiative](docs/PROJECT-STATUS-CONTRACT-PLAN.md) will let Wolf Den passively read a **producer-owned, versioned JSON status snapshot** from each registered project. HandyLab, TopHat, or any other workflow could publish the same format; Wolf Den will not need to know which one. Planned supporting pieces are a portable JSON Schema, optional TypeScript types, a minimal `init`/`validate` CLI, and a reusable agent reporting skill with explicit human setup instructions.
+
+This is **not implemented**. The registry's manually authored Next Action remains the current behavior through the approved v0.3 work; migration to reported next actions will be designed separately. The guiding rule is to keep the solution dead simple, without agent orchestration or background services.
+
 ## Open source and portfolio
 
 Wolf Den is a local-first, read-only terminal dashboard built with TypeScript, Node.js and OpenTUI. It combines local Git status, optional GitHub activity and keyboard-driven project shortcuts. See [LICENSE](LICENSE) for the MIT license.

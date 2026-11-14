@@ -16,6 +16,27 @@ Wolf Den reduces the effort needed to understand and resume work across software
 - If instructions conflict, requirements are unclear in a consequential way, or the change would expand scope, explain the issue rather than silently inventing a new product decision.
 - Prefer small, maintainable solutions to generalized frameworks or speculative extensibility.
 
+## Local HandyLab skills — use deliberately
+
+The project keeps a small set of relevant skills in [`.agents/skills/`](.agents/skills/), copied from [HandyLab Skills Library](https://github.com/VesaMalaska/handylab-skills-library). Read the relevant `SKILL.md` **before** starting that kind of work; apply it alongside this file, the assigned issue, and the approved roadmap/spec. **AGENTS.md and explicit owner instructions win** if a generic skill's examples differ. Skills are guidance, not permission to widen scope or bypass human approval.
+
+| Situation | Skill to read |
+| --- | --- |
+| Every authorized branch/commit/PR workflow | `.agents/skills/git-task-workflow/SKILL.md` |
+| Implementing or verifying a Task, preparing test evidence | `.agents/skills/task-verification/SKILL.md` |
+| Final self-review or owner-requested PR review | `.agents/skills/code-review/SKILL.md` |
+| Investigating a bug, regression, race or hard-to-reproduce issue | `.agents/skills/diagnosing-bugs/SKILL.md` |
+| Changing provider, registry, domain or module boundaries | `.agents/skills/codebase-design/SKILL.md` |
+| Building/refactoring OpenTUI rendering, keyboard, layout or lifecycle | `.agents/skills/opentui-core-development/SKILL.md` |
+| Visible terminal design/UX work; also read OpenTUI skill if coding the view | `.agents/skills/terminal-ui-ux-design/SKILL.md` |
+| Owner explicitly requests Phase/Chunk planning or proposed Tasks | `.agents/skills/chunk-planning/SKILL.md` |
+
+Do **not** load every skill for every Task; use only those that match the work. For a typical implementation Task, start with Git workflow and task verification, then add relevant specialists. For an OpenTUI visual change, read both the OpenTUI and terminal UI/UX skills and obtain real terminal evidence and human visual acceptance. Chunk planning does **not** authorize issue creation or implementation without owner approval. Code review and verification do **not** authorize merging.
+
+These are **local copies**, not runtime dependencies or automatic links to the library; update intentionally after reviewing changes upstream. Excluded: Svelte 5 (Wolf Den uses OpenTUI, not Svelte) and optional Chunk retrospectives (not currently needed). Some skill examples were adapted from TwinkleDoo to Wolf Den's terminal, Git/GitHub, and registry boundaries.
+
+The future `project-status-reporter` skill discussed in `docs/PROJECT-STATUS-CONTRACT-PLAN.md` is **not yet available** in the source library and is **not introduced by this PR**. Do not invent a status contract or start writing status snapshots as a side effect of installing these skills.
+
 ## Architecture
 
 - TypeScript strict; Node.js 26; pnpm; Linux/openSUSE first; OpenTUI for presentation.
@@ -24,6 +45,14 @@ Wolf Den reduces the effort needed to understand and resume work across software
 - The **running application** must treat Git and GitHub as read-only. GitHub access uses authenticated `gh`, not copied API tokens. This restriction does not prohibit normal development commits and pushes on the assigned feature branch.
 - The manually maintained next action comes only from registry data; do not infer intent or urgency from commits, PRs or issue counts.
 - Preserve partial service availability: a failed integration must not hide successfully retrieved local state.
+
+## Future project status contract — documentation only
+
+- The planned producer-independent status contract is described in [`docs/PROJECT-STATUS-CONTRACT-PLAN.md`](docs/PROJECT-STATUS-CONTRACT-PLAN.md). **Do not implement it while working on unrelated v0.3 issues.**
+- For current v0.3 work, the registry-authored manual Next Action and existing read-only providers remain authoritative. Do not silently replace, infer, or remove that behavior.
+- When a future status-contract issue is explicitly assigned, preserve producer/consumer separation: producers own writing and validating their project snapshot; Wolf Den only reads and validates it. Do not add knowledge of HandyLab/TopHat internals, agent orchestration, daemons, databases, or unrequested infrastructure.
+- Favor one JSON snapshot, portable JSON Schema, derived optional TypeScript types, a minimal `init`/`validate` CLI, and a reusable reporting skill **outside Wolf Den's runtime**. Human setup must explicitly require the skill in the normal agent workflow. Finalize contract details only with a scoped issue and owner approval.
+- **HandyLab philosophy:** meet the requirement with the smallest reliable implementation. No TopHat-style scope growth.
 
 ## Safety and subprocesses
 
