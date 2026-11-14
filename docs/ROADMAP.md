@@ -5,7 +5,7 @@
 ## Product goal
 Make it easier to understand project state, identify attention items, and resume development across several independent repositories. Wolf Den is a hybrid: informative dashboard plus a handful of safe quick actions.
 
-## Sources of truth
+## Sources of truth (current behavior)
 | Data | Authority |
 | --- | --- |
 | Project ID, label, directory, lifecycle, next action | Local JSON registry |
@@ -13,7 +13,7 @@ Make it easier to understand project state, identify attention items, and resume
 | Issues, PRs, review/check data where available | GitHub via `gh` |
 | Detailed development plan | Existing project docs, outside Wolf Den |
 
-The next action is manual, **never inferred from a PR**. GitHub statistics are informational and may be stale if refresh fails.
+Today the next action is manual, **never inferred from a PR**. GitHub statistics are informational and may be stale if refresh fails. A later planned producer-owned project status contract is intended to supersede manual Next Action maintenance; it is **not implemented** and does not change the v0.3 source-of-truth rules.
 
 ## Scope — 0.1.0
 - Explicitly configured local projects, no filesystem-wide scanning.
@@ -142,6 +142,22 @@ The approved direction and architecture are specified in [v0.3 Cockpit UX, theme
 8. [#29 — Real Kitty QA and v0.3 release gate](https://github.com/VesaMalaska/wolf-den/issues/29) — end-to-end acceptance and safe release readiness; depends on #22–#28.
 
 **Release gate:** accessible keyboard navigation and readable 120×32, 100×25, 80×24, 56×22 and 42×18 displays; verified safe configuration mutations, failure recovery and real Kitty usability. Tag/release only with explicit owner approval.
+
+## Future initiative — producer-independent project status (direction agreed; not scheduled)
+
+**Outcome:** Replace the need to maintain Next Action manually by passively reading a small, producer-owned project status snapshot. Wolf Den must not know or care whether it was written by HandyLab, TopHat or another workflow. This is a future initiative **after the existing v0.3 scope**, not a reason to change or remove the already planned v0.3 editor now.
+
+See [Project Status Contract & Discovery — future plan](PROJECT-STATUS-CONTRACT-PLAN.md) for responsibilities, acceptance criteria, and unresolved decisions.
+
+### Minimal deliverables
+
+1. A **versioned JSON snapshot contract** with JSON Schema as the portable validation source and derived TypeScript types for projects that want them. Do not require TypeScript to produce valid status.
+2. A **tiny standalone validator CLI** supporting `init` and `validate`; schema validation catches structural mistakes, while the producer remains responsible for truthfulness.
+3. A reusable **Project Status Reporter skill** in the external HandyLab Skills Library, plus explicit human setup instructions to require the skill in the normal agent workflow.
+4. A **read-only Wolf Den consumer** discovering the optional file in each registered project, validating and displaying current work, last completed work, next action, attention needed and freshness. Existing Git/GitHub facts remain independent.
+5. A deliberate **Next Action precedence/migration** design: prefer valid producer-reported actions when available, retain the manual field during transition, and decide fallback behavior before implementation.
+
+**HandyLab philosophy:** dead simple, enough to do the job and nothing more. One snapshot file to start; no event system, background agent monitoring, database, service, orchestration or project auto-discovery. Finalize file path, exact fields, distribution and tracked/ignored policy when implementation is scheduled. Create focused implementation issues only after the contract is reviewed; each needs a separate PR and human approval.
 
 ## Later candidates (not approved for implementation)
 'Where Was I?' resume summary, recent commits, filters/search, cross-repo review queue, optional doc extraction and project discovery. Later ideas: Codex integration, session handovers and notifications. Add only to solve observed needs.
