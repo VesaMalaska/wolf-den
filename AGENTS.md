@@ -16,6 +16,27 @@ Wolf Den reduces the effort needed to understand and resume work across software
 - If instructions conflict, requirements are unclear in a consequential way, or the change would expand scope, explain the issue rather than silently inventing a new product decision.
 - Prefer small, maintainable solutions to generalized frameworks or speculative extensibility.
 
+## Local HandyLab skills — use deliberately
+
+The project keeps a small set of relevant skills in [`.agents/skills/`](.agents/skills/), copied from [HandyLab Skills Library](https://github.com/VesaMalaska/handylab-skills-library). Read the relevant `SKILL.md` **before** starting that kind of work; apply it alongside this file, the assigned issue, and the approved roadmap/spec. **AGENTS.md and explicit owner instructions win** if a generic skill's examples differ. Skills are guidance, not permission to widen scope or bypass human approval.
+
+| Situation | Skill to read |
+| --- | --- |
+| Every authorized branch/commit/PR workflow | `.agents/skills/git-task-workflow/SKILL.md` |
+| Implementing or verifying a Task, preparing test evidence | `.agents/skills/task-verification/SKILL.md` |
+| Final self-review or owner-requested PR review | `.agents/skills/code-review/SKILL.md` |
+| Investigating a bug, regression, race or hard-to-reproduce issue | `.agents/skills/diagnosing-bugs/SKILL.md` |
+| Changing provider, registry, domain or module boundaries | `.agents/skills/codebase-design/SKILL.md` |
+| Building/refactoring OpenTUI rendering, keyboard, layout or lifecycle | `.agents/skills/opentui-core-development/SKILL.md` |
+| Visible terminal design/UX work; also read OpenTUI skill if coding the view | `.agents/skills/terminal-ui-ux-design/SKILL.md` |
+| Owner explicitly requests Phase/Chunk planning or proposed Tasks | `.agents/skills/chunk-planning/SKILL.md` |
+
+Do **not** load every skill for every Task; use only those that match the work. For a typical implementation Task, start with Git workflow and task verification, then add relevant specialists. For an OpenTUI visual change, read both the OpenTUI and terminal UI/UX skills and obtain real terminal evidence and human visual acceptance. Chunk planning does **not** authorize issue creation or implementation without owner approval. Code review and verification do **not** authorize merging.
+
+These are **local copies**, not runtime dependencies or automatic links to the library; update intentionally after reviewing changes upstream. Excluded: Svelte 5 (Wolf Den uses OpenTUI, not Svelte) and optional Chunk retrospectives (not currently needed). Some skill examples were adapted from TwinkleDoo to Wolf Den's terminal, Git/GitHub, and registry boundaries.
+
+The future `project-status-reporter` skill discussed in `docs/PROJECT-STATUS-CONTRACT-PLAN.md` is **not yet available** in the source library and is **not introduced by this PR**. Do not invent a status contract or start writing status snapshots as a side effect of installing these skills.
+
 ## Architecture
 
 - TypeScript strict; Node.js 26; pnpm; Linux/openSUSE first; OpenTUI for presentation.
