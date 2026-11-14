@@ -63,11 +63,20 @@ export class SettingsNavigation {
 }
 
 export function settingsGeometry(width: number, height: number) {
-  const columns = Math.min(88, width >= 56 ? width - 4 : width);
-  const rows = Math.min(24, height);
+  const tight = height < 22;
+  const roomy = height >= 28;
   const padding = width >= 80 ? 2 : 1;
-  // Header, tabs, action divider/row, feedback and two keyboard-hint rows.
-  return { columns, rows, padding, innerWidth: columns - padding * 2, bodyHeight: rows - 9, compact: width < 80 || height < 22 };
+  const headingHeight = tight ? 1 : 2;
+  const tabsHeight = tight ? 2 : 1;
+  const dividerHeight = roomy ? 2 : 1;
+  const actionHeight = roomy ? 2 : 1;
+  const hintsHeight = tight ? 2 : 3;
+  const feedbackMinimum = width >= 80 ? 1 : 2;
+  const bodyHeight = height - headingHeight - tabsHeight - dividerHeight - actionHeight - feedbackMinimum - hintsHeight;
+  return { columns: width, rows: height, padding, innerWidth: width - padding * 2,
+    bodyHeight, headingHeight, tabsHeight, dividerHeight, actionHeight, hintsHeight, feedbackMinimum,
+    bodyPadding: tight ? 0 : 1, sectionGap: roomy ? 2 : tight ? 0 : 1,
+    groupHeadingHeight: tight ? 1 : 2, groupSpacing: !tight, compact: width < 80 || height < 24 };
 }
 
 function clip(text: string, width: number, widthMethod: WidthMethod): string {
@@ -132,7 +141,7 @@ export class SettingsView {
   constructor(private renderer: CliRenderer) {
     const box = (options: ConstructorParameters<typeof BoxRenderable>[1] = {}) => new BoxRenderable(renderer, { flexDirection: "column", flexShrink: 0, ...options });
     const text = (height = 1) => new TextRenderable(renderer, { height, flexShrink: 0, wrapMode: "none" });
-    this.root = box({ width: "100%", height: "100%", alignItems: "center", visible: false });
+    this.root = box({ width: "100%", height: "100%", visible: false });
     this.content = box({ width: "100%" }); this.root.add(this.content);
     this.heading = text(); this.tabs = text(2);
     this.body = box({ overflow: "hidden" });
@@ -150,10 +159,10 @@ export class SettingsView {
     this.general = text(6); this.body.add(this.general);
     this.colors = box(); this.body.add(this.colors);
     this.groupHeading = text(); this.colors.add(this.groupHeading);
-    this.colorRows = Array.from({ length: 23 }, () => {
+    this.colorRows = Array.from({ length: 28 }, () => {
       const row = box({ flexDirection: "row", height: 1 });
       const swatch = text(); swatch.width = 6;
-      const label = text(); label.flexGrow = 1;
+      const label = text();
       const value = text(); value.width = 9;
       row.add(swatch); row.add(label); row.add(value); this.colors.add(row);
       return { box: row, swatch, label, value };
@@ -174,7 +183,7 @@ export class SettingsView {
     this.root.visible = true;
     this.content.width = Math.max(1, g.columns); this.content.height = g.rows;
     this.content.paddingX = g.padding;
-    this.root.paddingTop = height > 24 ? 1 : 0;
+    this.heading.height = g.headingHeight; this.tabs.height = g.tabsHeight;
     if (!session || !theme || width < 42 || height < 18) {
       this.heading.content = "WOLF DEN / SETTINGS";
       this.tabs.content = !theme ? "Loading Settings…\nEsc Back" : "Resize to at least 42 × 18.\nEsc Back · Ctrl+C Quit";
@@ -182,7 +191,10 @@ export class SettingsView {
       return;
     }
     this.body.visible = this.actionRow.visible = this.actionDivider.visible = this.feedback.visible = this.hints.visible = true;
-    this.root.backgroundColor = theme.background; this.content.backgroundColor = theme.panel;
+    this.root.backgroundColor = theme.background; this.content.backgroundColor = theme.background;
+    this.body.paddingTop = g.bodyPadding;
+    this.actionDivider.height = g.dividerHeight; this.actionRow.height = g.actionHeight;
+    this.hints.height = g.hintsHeight;
     this.heading.fg = theme.heading; this.tabs.fg = theme.textSecondary;
     const w = g.innerWidth, wm = this.renderer.widthMethod;
     const fit = (value: string, columns = w) => clip(value, columns, wm);
@@ -190,8 +202,8 @@ export class SettingsView {
     const title = navigation.section === "colors" ? "APPEARANCE / COLORS" : "WOLF DEN / SETTINGS";
     this.heading.content = new StyledText([bold(fg(theme.heading)(title)), fg(session.dirty ? theme.attention : theme.success)(" ".repeat(Math.max(1, w - title.length - status.length)) + status)]);
     this.tabs.content = navigation.section === "colors" ? "Esc Back to Appearance" : new StyledText([
-      fg(navigation.section === "appearance" ? theme.accent : theme.textMuted)(navigation.section === "appearance" ? "[Appearance]" : " Appearance "),
-      fg(navigation.section === "general" ? theme.accent : theme.textMuted)(navigation.section === "general" ? "  [General]" : "   General"),
+      navigation.section === "appearance" ? bold(fg(theme.accent)("[Appearance]")) : fg(theme.textMuted)(" Appearance "),
+      navigation.section === "general" ? bold(fg(theme.accent)("  [General]")) : fg(theme.textMuted)("   General"),
     ]);
     const feedback = session.confirmation === "reset" ? "Reset all appearance colors? Enter confirms; Esc keeps draft. Save keeps the reset."
       : session.confirmation === "discard" ? "Discard unsaved changes and return? Enter discards; Esc keeps editing."
@@ -201,8 +213,8 @@ export class SettingsView {
       : session.message;
     const feedbackLines = settingsFeedbackLines(feedback, w, wm);
     // Long persistence/conflict messages borrow body rows, never the action/hint rows.
-    const feedbackHeight = Math.min(Math.max(2, feedbackLines.length), g.bodyHeight - 3);
-    const bodyHeight = g.bodyHeight - (feedbackHeight - 2);
+    const feedbackHeight = Math.min(Math.max(g.feedbackMinimum, feedbackLines.length), g.bodyHeight - 3);
+    const bodyHeight = g.bodyHeight - (feedbackHeight - g.feedbackMinimum);
     this.body.height = bodyHeight;
     this.feedback.height = feedbackHeight;
     this.feedback.fg = session.error ? theme.error : session.confirmation ? theme.attention : theme.textSecondary;
@@ -215,19 +227,22 @@ export class SettingsView {
     this.general.visible = !navigation.help && navigation.section === "general";
     this.colors.visible = !navigation.help && navigation.section === "colors";
     this.help.visible = navigation.help;
-    this.preset.height = g.compact ? 2 : 3;
-    this.preset.content = new StyledText([fg(theme.textMuted)("Theme preset\n"), line(themeLabels[session.themeId], navigation.control === "preset")]);
-    this.previewLabel.fg = theme.textMuted; this.previewLabel.content = "COCKPIT PREVIEW · SAMPLE";
+    this.preset.height = 2 + g.sectionGap;
+    this.preset.content = new StyledText([bold(fg(theme.heading)("THEME PRESET\n")), line(themeLabels[session.themeId], navigation.control === "preset")]);
+    this.previewLabel.content = new StyledText([bold(fg(theme.heading)("COCKPIT PREVIEW")), fg(theme.textMuted)(" · SAMPLE")]);
     this.updatePreview(theme, w, g.compact, fit);
-    this.customize.height = g.compact ? 2 : 3;
-    this.customize.content = new StyledText([line("Customize colors >", navigation.control === "customize"), fg(theme.textMuted)("\n" + fit("  Surfaces, text, focus and status"))]);
-    this.general.content = new StyledText([fg(theme.textMuted)("Terminal preference\n"), line(session.terminal === "system" ? "System default" : session.terminal, navigation.control === "terminal"), fg(theme.textSecondary)("\n\n" + fit("Used when opening a project terminal.") + "\nTakes effect after Save.")]);
-    this.updateColors(session, navigation, Math.max(1, bodyHeight - 2), w, fit);
+    this.customize.marginTop = g.sectionGap; this.customize.height = 2;
+    this.customize.content = new StyledText([bold(line("Customize colors >", navigation.control === "customize")), fg(theme.textMuted)("\n" + fit("  Surfaces, text, focus and status"))]);
+    this.general.height = 6 + g.sectionGap;
+    this.general.content = new StyledText([bold(fg(theme.heading)("TERMINAL PREFERENCE\n" + "\n".repeat(g.sectionGap))), line(session.terminal === "system" ? "System default" : session.terminal, navigation.control === "terminal"), fg(theme.textSecondary)("\n\n" + fit("Used when opening a project terminal.") + "\nTakes effect after Save.")]);
+    this.groupHeading.height = g.groupHeadingHeight;
+    this.updateColors(session, navigation, Math.max(1, bodyHeight - g.bodyPadding - g.groupHeadingHeight - 1), w, g.groupSpacing, fit);
     const help = ["SETTINGS HELP", "↑/↓ Move · ←/→ Appearance/General", "Tab / Shift+Tab: actions / return", "Enter edits or activates", "Colors: type six hex digits after #", "Enter accepts; Esc cancels color edit", "Esc Colors: back, draft retained", "* marks a custom color override", "Save writes Appearance + General", "Cancel exits; confirms draft discard", "Reset: confirm, preview, then Save", "Reload: confirm discard, read disk", "PgUp/PgDn scroll · ? closes help", "Esc returns · Ctrl+C quits"];
-    navigation.helpOffset = Math.min(navigation.helpOffset, Math.max(0, help.length - bodyHeight));
-    this.help.height = bodyHeight; this.help.fg = theme.textSecondary;
-    this.help.content = help.slice(navigation.helpOffset, navigation.helpOffset + bodyHeight).map(value => fit(value)).join("\n");
-    this.actionDivider.fg = theme.divider; this.actionDivider.content = "─".repeat(w);
+    const helpHeight = bodyHeight - g.bodyPadding;
+    navigation.helpOffset = Math.min(navigation.helpOffset, Math.max(0, help.length - helpHeight));
+    this.help.height = helpHeight; this.help.fg = theme.textSecondary;
+    this.help.content = help.slice(navigation.helpOffset, navigation.helpOffset + helpHeight).map(value => fit(value)).join("\n");
+    this.actionDivider.fg = theme.divider; this.actionDivider.content = "\n".repeat(g.dividerHeight - 1) + "─".repeat(w);
     const actionLabels = { save: g.compact ? "Save" : "Save changes", cancel: "Cancel", reset: g.compact ? "Reset" : "Reset appearance", reload: "Reload" };
     for (const [control, node] of this.actionNodes) {
       node.visible = navigation.actions.includes(control);
@@ -236,22 +251,23 @@ export class SettingsView {
       node.content = new StyledText([navigation.control === control ? selected(`> ${label} `, true) : fg(control === "save" ? theme.accent : theme.textSecondary)(`  ${label}  `)]);
     }
     this.hints.fg = theme.textMuted;
-    this.hints.content = navigation.help ? "PgUp/PgDn Scroll\n? Close help · Esc Back" : session.editing ? "Type #RRGGBB · Backspace corrects\nEnter Accept · Esc Cancel edit" : navigation.section === "colors"
+    const hints = navigation.help ? "PgUp/PgDn Scroll\n? Close help · Esc Back" : session.editing ? "Type #RRGGBB · Backspace corrects\nEnter Accept · Esc Cancel edit" : navigation.section === "colors"
       ? "↑↓ Move · Enter Edit · Tab Actions\nPgUp/PgDn Scroll · Esc Back · ? Help"
       : "↑↓ Move · Enter Choose · Tab Actions\n←→ Section · Esc Back · ? Help";
+    this.hints.content = (g.hintsHeight > 2 ? "\n" : "") + hints;
   }
 
   private updatePreview(theme: SemanticTheme, width: number, compact: boolean, fit: (text: string, width?: number) => string): void {
     this.preview.height = compact ? 4 : 7;
     this.preview.borderColor = theme.divider; this.preview.border = compact ? [] : true;
-    this.preview.backgroundColor = theme.background;
+    this.preview.backgroundColor = theme.panel;
     this.preview.paddingX = compact ? 0 : 1;
     this.radar.visible = !compact;
     this.radar.width = 24; this.radar.height = 5;
     this.radar.content = new StyledText([fg(theme.heading)("PROJECT RADAR\n"), fg(theme.textOnSelection)(bg(theme.selectionBackground)("> Sample project      ")), fg(theme.success)("\n  main · Clean"), fg(theme.textMuted)("\n\n1 project · 1 clean")]);
     const inner = compact ? width : width - 28;
     this.workbench.width = inner;
-    this.sampleHeading.bg = compact ? theme.selectionBackground : theme.background;
+    this.sampleHeading.bg = compact ? theme.selectionBackground : theme.panel;
     this.sampleHeading.content = new StyledText([fg(compact ? theme.textOnSelection : theme.heading)(compact ? "> Sample project · main · Clean".padEnd(inner) : "PROJECT WORKBENCH")]);
     this.nextAction.bg = theme.panelAlt;
     this.nextAction.content = new StyledText([bold(fg(theme.accent)("Next action".padEnd(inner) + "\n")), fg(theme.textPrimary)(fit("Review the next task", inner).padEnd(inner))]);
@@ -260,40 +276,47 @@ export class SettingsView {
     this.samplePr.content = new StyledText([fg(theme.textSecondary)("PR "), fg(theme.accentSubtle)("#35"), fg(theme.success)(" · Open"), fg(theme.textSecondary)(" · Settings polish")]);
   }
 
-  private updateColors(session: SettingsSession, navigation: SettingsNavigation, capacity: number, width: number, fit: (text: string, width?: number) => string): void {
+  private updateColors(session: SettingsSession, navigation: SettingsNavigation, capacity: number, width: number, groupSpacing: boolean, fit: (text: string, width?: number) => string): void {
     const theme = session.theme;
-    const entries: { token?: ThemeToken; group: string }[] = colorGroups.flatMap(group => [
+    const entries: { token?: ThemeToken; group: string; spacer?: boolean }[] = colorGroups.flatMap((group, index) => [
+      ...(groupSpacing && index > 0 ? [{ group: group.label, spacer: true }] : []),
       { group: group.label }, ...group.tokens.map(token => ({ token, group: group.label })),
     ]);
     const selected = entries.findIndex(entry => entry.token === navigation.control);
     if (selected >= 0) this.offset = Math.max(0, Math.min(this.offset, selected));
     if (selected >= this.offset + capacity) this.offset = selected - capacity + 1;
     this.offset = Math.min(this.offset, Math.max(0, entries.length - capacity));
-    const start = this.offset + (entries[this.offset]!.token ? 0 : 1);
-    this.groupHeading.fg = theme.heading;
-    this.groupHeading.content = entries[this.offset]!.group.toUpperCase();
+    let start = this.offset;
+    while (start < entries.length && !entries[start]!.token) start++;
+    let end = Math.min(entries.length, start + capacity);
+    // Keep a group title with at least one color instead of orphaning it above the footer.
+    while (end > start && !entries[end - 1]!.token) end--;
+    this.groupHeading.content = new StyledText([bold(fg(theme.heading)(entries[start]!.group.toUpperCase()))]);
     this.colorRows.forEach((row, index) => {
       const entry = entries[start + index];
-      row.box.visible = index < capacity && entry !== undefined;
+      row.box.visible = start + index < end;
       if (!row.box.visible || !entry) return;
       const token = entry.token;
       const active = navigation.control === token;
-      row.box.backgroundColor = active ? theme.selectionBackground : theme.panel;
+      row.box.backgroundColor = active ? theme.selectionBackground : theme.background;
+      row.label.width = Math.min(34, width - 15);
       if (!token) {
+        row.swatch.width = 0; row.value.width = 0; row.label.width = width;
         row.swatch.content = ""; row.value.content = "";
-        row.label.fg = theme.heading; row.label.content = entry.group.toUpperCase();
+        row.label.content = entry.spacer ? "" : new StyledText([bold(fg(theme.heading)(entry.group.toUpperCase()))]);
         return;
       }
+      row.swatch.width = 6; row.value.width = 9;
       const custom = session.overrides[token] !== undefined;
       const value = session.editing?.token === token ? session.editing.value + "_" : theme[token];
       row.swatch.content = new StyledText([fg(active ? theme.textOnSelection : theme.textSecondary)(active ? "> " : "  "), fg(theme.textMuted)("["), bg(theme[token])(" "), fg(theme.textMuted)("] ")]);
       row.label.fg = active ? theme.textOnSelection : theme.textPrimary;
-      row.label.content = fit(colorLabels[token] + (custom ? " *" : ""), width - 15);
+      row.label.content = fit(colorLabels[token] + (custom ? " *" : ""), Math.min(34, width - 15));
       row.value.fg = active ? theme.textOnSelection : theme.textMuted;
       row.value.content = value;
     });
     this.scrollHint.fg = theme.textMuted;
-    const current = entries[Math.max(0, selected)]!;
-    this.scrollHint.content = fit(`${current.group}${current.token && session.overrides[current.token] !== undefined ? " · * custom" : ""}${start + capacity < entries.length ? " · More below ↓" : " · End"}`);
+    const current = entries[selected >= 0 ? selected : start]!;
+    this.scrollHint.content = fit(`${current.group}${current.token && session.overrides[current.token] !== undefined ? " · * custom" : ""}${end < entries.length ? " · More below ↓" : " · End"}`);
   }
 }
