@@ -35,6 +35,7 @@ export const themePresets = {
 export type ThemeId = keyof typeof themePresets;
 export const defaultThemeId: ThemeId = "wolfy-dark";
 export const themeIds = Object.keys(themePresets) as ThemeId[];
+export const themeLabels: Record<ThemeId, string> = { "wolfy-dark": "Wolfy Dark / Deep Forest" };
 export const rgbColorPattern = /^#[0-9A-Fa-f]{6}$/;
 
 export function resolveTheme(theme: ThemeId = defaultThemeId, overrides: Partial<Record<ThemeToken, string>> = {}): SemanticTheme {

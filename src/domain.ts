@@ -23,3 +23,4 @@ export type GithubState =
 
 export type ProjectState = { project: Project; git: GitState; github: GithubState };
 export type TerminalPreference = "system" | "kitty" | "konsole" | "gnome-terminal" | "xfce4-terminal" | "alacritty" | "xterm";
+export const terminalPreferences: readonly TerminalPreference[] = ["system", "kitty", "konsole", "gnome-terminal", "xfce4-terminal", "alacritty", "xterm"];
