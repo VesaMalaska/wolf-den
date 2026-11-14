@@ -25,6 +25,14 @@ Wolf Den reduces the effort needed to understand and resume work across software
 - The manually maintained next action comes only from registry data; do not infer intent or urgency from commits, PRs or issue counts.
 - Preserve partial service availability: a failed integration must not hide successfully retrieved local state.
 
+## Future project status contract — documentation only
+
+- The planned producer-independent status contract is described in [`docs/PROJECT-STATUS-CONTRACT-PLAN.md`](docs/PROJECT-STATUS-CONTRACT-PLAN.md). **Do not implement it while working on unrelated v0.3 issues.**
+- For current v0.3 work, the registry-authored manual Next Action and existing read-only providers remain authoritative. Do not silently replace, infer, or remove that behavior.
+- When a future status-contract issue is explicitly assigned, preserve producer/consumer separation: producers own writing and validating their project snapshot; Wolf Den only reads and validates it. Do not add knowledge of HandyLab/TopHat internals, agent orchestration, daemons, databases, or unrequested infrastructure.
+- Favor one JSON snapshot, portable JSON Schema, derived optional TypeScript types, a minimal `init`/`validate` CLI, and a reusable reporting skill **outside Wolf Den's runtime**. Human setup must explicitly require the skill in the normal agent workflow. Finalize contract details only with a scoped issue and owner approval.
+- **HandyLab philosophy:** meet the requirement with the smallest reliable implementation. No TopHat-style scope growth.
+
 ## Safety and subprocesses
 
 - Never implement Git writes, repository mutation, arbitrary project command execution or GitHub edits as application features.
