@@ -203,6 +203,42 @@ test("Projects add, compact field scrolling, native editor keys, Apply and Save 
   }
 });
 
+test("manual Next Action set/change/clear saves from Projects and survives dashboard recreation at all sizes", async () => {
+  for (const [width, height] of [[120, 32], [100, 25], [80, 24], [56, 22], [42, 18]]) {
+    const app = await cockpit(width!, height!, ["Atlas"]);
+    try {
+      for (const value of ["Review task", "Ship 界", ""]) {
+        const before = await readFile(app.path, "utf8");
+        app.mockInput.pressArrow("right"); await app.enter();
+        for (let i = 0; i < 4; i++) app.mockInput.pressTab();
+        assert.match(await app.frame(), /> Next Action/);
+        await app.enter(); app.mockInput.pressKey("a", { ctrl: true });
+        app.mockInput.pressBackspace();
+        if (value) await app.mockInput.pasteBracketedText(value);
+        app.mockInput.pressTab();
+        assert.match(await app.frame(), /> Apply to draft/);
+        await app.enter(); await app.waitFor("[Projects]");
+        assert.equal(await readFile(app.path, "utf8"), before, "Apply must not write");
+        app.mockInput.pressTab(); await app.enter(); await app.waitFor("Settings saved.");
+        const saved = JSON.parse(await readFile(app.path, "utf8"));
+        assert.equal(saved.projects[0].nextAction, value || undefined);
+        if (!value) assert.equal(Object.hasOwn(saved.projects[0], "nextAction"), false);
+        await app.escape();
+        assert.ok((await app.frame()).includes(value || "Not set"));
+
+        // A second application reads only the persisted file, with no shared session.
+        const restarted = await createTestRenderer({ width: width!, height: height!, screenMode: "alternate-screen" });
+        try {
+          await runDashboard(app.path, async () => restarted.renderer);
+          await restarted.renderOnce();
+          assert.ok(restarted.captureCharFrame().includes(value || "Not set"));
+        } finally { await restarted.dispose(); }
+        app.mockInput.pressKey("s"); await app.waitFor("COCKPIT PREVIEW");
+      }
+    } finally { await app.close(); }
+  }
+});
+
 test("Projects removal defaults to Cancel, stages only after explicit selection, and handles last removal", async () => {
   const app = await cockpit(42, 18, ["Atlas"]);
   try {

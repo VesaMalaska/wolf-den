@@ -128,6 +128,43 @@ test("conflicts preserve draft; canceled/failed Reload preserves it; successful 
   assert.equal(session.terminal, "xterm"); assert.deepEqual(session.projects.entries, []); assert.equal(session.dirty, false);
 }));
 
+test("Next Action field/form/Settings cancellation and failed Save preserve persisted action", async () => fixture(async (session, path) => {
+  const before = await readFile(path, "utf8");
+  session.projects.openForm(); session.projects.startField("nextAction"); session.projects.input("Canceled field");
+  session.projects.cancelField();
+  assert.equal(session.projects.form?.values.nextAction, "Review");
+  session.projects.form!.values.nextAction = "Canceled form";
+  assert.equal(session.projects.closeForm(), false);
+  session.projects.discardingForm = false; session.projects.form = null;
+  assert.equal(session.projects.selected?.nextAction, "Review");
+  session.projects.openForm(); session.projects.form!.values.nextAction = "Retry this action";
+  await session.applyProject(unavailable);
+  assert.equal(await session.save(), false);
+  assert.equal(session.projects.selected?.nextAction, "Retry this action");
+  assert.equal(await readFile(path, "utf8"), before);
+  session.requestExit(); session.cancelConfirmation();
+  assert.equal(session.projects.selected?.nextAction, "Retry this action");
+  session.requestExit(); assert.equal(await session.confirm(), "exit");
+  assert.equal(await readFile(path, "utf8"), before);
+}, true));
+
+test("Next Action conflict and canceled/failed/successful Reload preserve the correct action", async () => fixture(async (session, path) => {
+  session.projects.openForm(); session.projects.form!.values.nextAction = "Draft action";
+  await session.applyProject(unavailable);
+  const external = { version: 1, projects: [{ ...project, nextAction: "External action" }] };
+  await writeFile(path, JSON.stringify(external));
+  assert.equal(await session.save(), false); assert.match(session.message, /Conflict/);
+  assert.equal(session.projects.selected?.nextAction, "Draft action");
+  assert.deepEqual(JSON.parse(await readFile(path, "utf8")), external);
+  session.requestReload(); session.cancelConfirmation();
+  assert.equal(session.projects.selected?.nextAction, "Draft action");
+  await writeFile(path, "invalid JSON"); session.requestReload(); await session.confirm();
+  assert.equal(session.projects.selected?.nextAction, "Draft action");
+  await writeFile(path, JSON.stringify(external)); session.requestReload(); await session.confirm();
+  assert.equal(session.projects.selected?.nextAction, "External action");
+  assert.equal(session.dirty, false);
+}));
+
 test("ID selection survives insertions/reordering; removed selection chooses next then previous", () => {
   assert.equal(retainedProjectId(["a", "b", "c"], ["c", "b", "a", "d"], "b"), "b");
   assert.equal(retainedProjectId(["a", "b", "c"], ["a", "c"], "b"), "c");
