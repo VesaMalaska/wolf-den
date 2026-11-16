@@ -110,7 +110,7 @@ The implemented navigator uses two-line entries when space allows and one-line e
 - Any v0.1 release gate is separate from v0.2 acceptance; this roadmap does not imply a v0.1 release was tagged.
 - Do not tag v0.2 before visual/manual QA and explicit human approval.
 
-## v0.3 — The Wolf's cockpit and configurable den (approved; implementation pending)
+## v0.3 — The Wolf's cockpit and configurable den (approved; release QA pending)
 
 **Goal:** A professional, distinctive developer cockpit that answers both *what needs attention across projects* and *what should I do next in the selected project*. Add editable local configuration without mutating Git or GitHub.
 
@@ -118,12 +118,14 @@ The approved direction and architecture are specified in [v0.3 Cockpit UX, theme
 
 ### Experience goals
 - **Project radar (left):** factual multi-project overview, readable states, aggregate Git signals and optional available GitHub counts. No invented project-health or urgency metric.
-- **Selected project (right):** clear identity, highly visible editable manual next action, distinct Git and GitHub zones, and less repetitive PR summaries.
+- **Selected project (right):** clear identity, highly visible manual next action, distinct Git and GitHub zones, and less repetitive PR summaries.
 - **PRs and footer:** compact open/draft rows, selected PR detail, useful truncation, contextual keyboard hints and accessible compact modes.
 - **Wolf Den identity:** semantic color tokens; a first built-in, customizable *Wolfy Dark* theme (moonlight, plum, forest, amber). Future presets possible without UI rewrites.
 - **Settings (`s` proposed):** separate Appearance, Projects, General views; safe preview/save/cancel/reset. Existing terminal preference becomes editable. Terminal font selection is **not supported** by the app.
 - **Projects:** add, edit basic metadata, and *Remove from Den* (registry entry only; never delete directories or Git repositories).
-- **Next action (`n` proposed):** edit/clear manual next action directly from the dashboard without using JSON editor.
+- **Next action:** retain the registry-authored cockpit display; set/change/clear through Settings → Projects without using a JSON editor.
+
+**Scope revision approved by WOLFY on 2026-11-16:** PR #38 merged the Project Manager into `development`, including manual Next Action editing. Defer #28's cockpit shortcut/editor beyond v0.3 to avoid duplicating that flow. Keep #28 open for later reassessment; it is not a release prerequisite. The future Project Status Contract remains separately scoped and unimplemented.
 
 ### Architecture and scope rules
 - Extend existing version-1 JSON registry with optional theme fields; preserve existing user configs and the read-only Git/GitHub boundary.
@@ -138,14 +140,15 @@ The approved direction and architecture are specified in [v0.3 Cockpit UX, theme
 4. [#25 — Safe registry persistence](https://github.com/VesaMalaska/wolf-den/issues/25) — atomic validated writes, conflict detection and non-destructive saves; depends on #22.
 5. [#26 — Settings view](https://github.com/VesaMalaska/wolf-den/issues/26) — Appearance/General, live theme preview/save/reset, terminal setting; depends on #22, #24 and #25.
 6. [#27 — Project manager](https://github.com/VesaMalaska/wolf-den/issues/27) — explicit Add/Edit/Remove from Den; depends on #25 and #26.
-7. [#28 — Direct next-action editor](https://github.com/VesaMalaska/wolf-den/issues/28) — quick manual edit/clear; depends on #23, #25 and #27.
-8. [#29 — Real Kitty QA and v0.3 release gate](https://github.com/VesaMalaska/wolf-den/issues/29) — end-to-end acceptance and safe release readiness; depends on #22–#28.
+7. [#29 — Real Kitty QA and v0.3 release gate](https://github.com/VesaMalaska/wolf-den/issues/29) — end-to-end acceptance and safe release readiness; depends on #22–#27. Verify manual Next Action through Settings → Projects, including set/change/clear, cancellation, save/restart, failed writes and external edit conflicts.
+
+**Deferred beyond v0.3:** [#28 — Direct next-action editor](https://github.com/VesaMalaska/wolf-den/issues/28). No `n` shortcut/editor is required for v0.3. Reassess its value before scheduling implementation.
 
 **Release gate:** accessible keyboard navigation and readable 120×32, 100×25, 80×24, 56×22 and 42×18 displays; verified safe configuration mutations, failure recovery and real Kitty usability. Tag/release only with explicit owner approval.
 
 ## Future initiative — producer-independent project status (direction agreed; not scheduled)
 
-**Outcome:** Replace the need to maintain Next Action manually by passively reading a small, producer-owned project status snapshot. Wolf Den must not know or care whether it was written by HandyLab, TopHat or another workflow. This is a future initiative **after the existing v0.3 scope**, not a reason to change or remove the already planned v0.3 editor now.
+**Outcome:** Replace the need to maintain Next Action manually by passively reading a small, producer-owned project status snapshot. Wolf Den must not know or care whether it was written by HandyLab, TopHat or another workflow. This remains a separately approved future initiative **after v0.3**. v0.3 retains the manual display and Settings → Projects editing; deferring #28 does not implement or change status-source precedence.
 
 See [Project Status Contract & Discovery — future plan](PROJECT-STATUS-CONTRACT-PLAN.md) for responsibilities, acceptance criteria, and unresolved decisions.
 
