@@ -1,4 +1,7 @@
 import { terminalPreferences, type TerminalPreference } from "./domain.js";
+import { inspectGit } from "./git.js";
+import { ProjectRegistrations } from "./project-registrations.js";
+import { expandProjectPath } from "./registry.js";
 import { RegistryPersistence, RegistryPersistenceError, type RegistrySnapshot } from "./registry-persistence.js";
 import { defaultThemeId, resolveTheme, rgbColorPattern, themeIds, themeTokens, type SemanticTheme, type ThemeId, type ThemeToken } from "./theme.js";
 
@@ -23,15 +26,20 @@ export class SettingsSession {
   message = "Changes preview immediately. Save keeps them.";
   error = false;
   busy = false;
+  checkingProject = false;
+  projects: ProjectRegistrations;
   private saved: Draft;
   private draft: Draft;
 
-  constructor(private snapshot: RegistrySnapshot, private readonly persistence: RegistryPersistence) {
+  constructor(private snapshot: RegistrySnapshot, private readonly persistence: RegistryPersistence, selectedId?: string) {
     this.saved = draftFrom(snapshot);
     this.draft = draftFrom(snapshot);
+    this.projects = new ProjectRegistrations(snapshot.document.projects, selectedId);
   }
 
-  get dirty(): boolean { return !equalDraft(this.draft, this.saved); }
+  get dirty(): boolean { return !equalDraft(this.draft, this.saved) || JSON.stringify(this.projects.entries) !== JSON.stringify(this.snapshot.document.projects); }
+  get document(): RegistrySnapshot["document"] { return this.snapshot.document; }
+  get revision(): string { return this.snapshot.revision; }
   get theme(): SemanticTheme { return resolveTheme(this.draft.theme, this.draft.overrides); }
   get themeId(): ThemeId { return this.draft.theme; }
   get terminal(): TerminalPreference { return this.draft.terminal; }
@@ -113,6 +121,21 @@ export class SettingsSession {
   requestReload(): void { this.confirmation = "reload"; this.message = "Reload discards this draft and reads the current registry. Enter confirms; Esc keeps editing."; this.error = false; }
   cancelConfirmation(): void { this.confirmation = null; this.message = "Confirmation canceled; draft preserved."; this.error = false; }
 
+  async applyProject(inspect = inspectGit): Promise<boolean> {
+    if (this.busy) return false;
+    const project = this.projects.apply();
+    if (!project) return false;
+    this.busy = this.checkingProject = true;
+    this.message = "Checking directory…";
+    this.error = false;
+    try {
+      const git = await inspect(expandProjectPath(project.path.trim()));
+      this.message = git.kind === "unavailable" ? `${git.reason} Registration is in the draft; Save to keep it.` : "Project applied to draft. Save to keep it.";
+    } catch { this.message = "Directory inspection unavailable. Registration is in the draft; Save to keep it."; }
+    finally { this.busy = this.checkingProject = false; }
+    return true;
+  }
+
   async confirm(): Promise<"exit" | "stay"> {
     const action = this.confirmation;
     this.confirmation = null;
@@ -129,7 +152,7 @@ export class SettingsSession {
 
   async save(): Promise<boolean> {
     if (this.busy) return false;
-    if (this.editing) { this.message = "Finish the color edit before saving."; this.error = true; return false; }
+    if (this.editing || this.projects.form || this.projects.removingId) { this.message = "Finish the current edit before saving."; this.error = true; return false; }
     this.busy = true;
     try {
       const settings = { ...this.snapshot.document.settings };
@@ -138,12 +161,13 @@ export class SettingsSession {
       if (this.draft.terminal !== this.saved.terminal || settings.terminal !== undefined) settings.terminal = this.draft.terminal;
       if (Object.keys(this.draft.overrides).length) settings.themeOverrides = { ...this.draft.overrides };
       else if (JSON.stringify(this.draft.overrides) !== JSON.stringify(this.saved.overrides)) delete settings.themeOverrides;
-      const document = { ...this.snapshot.document, ...(Object.keys(settings).length ? { settings } : { settings: undefined }) };
+      const document = { ...this.snapshot.document, projects: this.projects.entries, ...(Object.keys(settings).length ? { settings } : { settings: undefined }) };
       if (document.settings === undefined) delete document.settings;
       const saved = await this.persistence.save(document, this.snapshot.revision);
       this.snapshot = saved;
       this.saved = draftFrom(saved);
       this.draft = draftFrom(saved);
+      this.projects = new ProjectRegistrations(saved.document.projects, this.projects.selectedId);
       this.message = "Settings saved.";
       this.error = false;
       return true;
@@ -164,6 +188,7 @@ export class SettingsSession {
       this.snapshot = snapshot;
       this.saved = draftFrom(snapshot);
       this.draft = draftFrom(snapshot);
+      this.projects = new ProjectRegistrations(snapshot.document.projects, this.projects.selectedId);
       this.message = "Registry reloaded. Review settings before saving.";
       this.error = false;
     } catch (error) {

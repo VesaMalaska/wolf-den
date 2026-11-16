@@ -58,7 +58,7 @@ test("selected PR stays in details while loading and stale remote state remains 
   assert.match(detailLines(state, 0).lines.join("\n"), /Stale · Offline.*Issues 2 open \(previous\)/s);
   state.github = { kind: "unavailable", reason: "Not configured" };
   assert.match(detailLines(state, -1).lines.join("\n"), /Unavailable · Not configured/);
-  assert.match(detailLines(undefined, -1).lines[0]!, /No projects configured/);
+  assert.match(detailLines(undefined, -1).lines[0]!, /No projects registered.*Press s/);
 });
 
 test("navigation stays at zero before projects load and with an empty registry", () => {

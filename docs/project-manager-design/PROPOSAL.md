@@ -1,6 +1,6 @@
 # Issue #27 — Settings Project Manager design proposal
 
-**Proposed. Awaiting WOLFY DESIGN APPROVAL; no UI implementation.**
+**WOLFY DESIGN APPROVED in the owner conversation. Implementation and evidence: [Project manager QA](../PROJECT-MANAGER-QA.md). WOLFY UX approval remains pending.**
 
 Branch: `feat/issue-27-settings-project-manager`, created from freshly fetched `origin/development` at `f014b25` (merged PR #35). Reviewed [#27](https://github.com/VesaMalaska/wolf-den/issues/27), dependencies [#25](https://github.com/VesaMalaska/wolf-den/issues/25)/[#26](https://github.com/VesaMalaska/wolf-den/issues/26), AGENTS, README, roadmap/spec, existing Settings captures, session/view/tests and registry validation/persistence. Both prerequisite implementations are integrated.
 
@@ -316,6 +316,6 @@ Temporary-registry tests will cover validation, ID collisions/stability, optiona
 
 Run `pnpm typecheck`, `pnpm test`, `pnpm build`, `git diff --check`. Exercise actual OpenTUI keyboard/focus/error/resize behavior at all five sizes. Provide comparable before/after Settings captures, new-state renders, and normal/compact PTY flows; label these separately from real Kitty testing. Open one focused PR targeting development and stop for WOLFY UX approval. No #28, status contract, dependencies or new infrastructure.
 
-**Current evidence:** text wireframe geometry checked. No #27 application tests, OpenTUI renders, PTY flows or real Kitty checks performed; no application/test code changed.
+**Design checkpoint evidence:** text wireframe geometry was checked before implementation. The sketches below record the approved proposal; implementation verification is reported separately in [Project manager QA](../PROJECT-MANAGER-QA.md).
 
-**Await WOLFY DESIGN APPROVAL before implementation.**
+**Design gate passed. Stop for WOLFY UX approval on the implemented result.**

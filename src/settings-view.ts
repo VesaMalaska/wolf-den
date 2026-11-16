@@ -1,6 +1,8 @@
 import { BoxRenderable, TextRenderable, StyledText, fg, bg, bold, measureEditText, type CliRenderer, type WidthMethod } from "@opentui/core";
 import { settingsControls, type SettingsControl, type SettingsSession } from "./settings.js";
 import { themeLabels, type SemanticTheme, type ThemeToken } from "./theme.js";
+import { projectFields, type ProjectField, type ProjectRegistrations } from "./project-registrations.js";
+import { ProjectSettingsView } from "./project-settings-view.js";
 
 export const colorGroups = [
   { label: "Surfaces", tokens: ["background", "panel", "panelAlt"] },
@@ -18,27 +20,45 @@ const colorLabels: Record<ThemeToken, string> = {
   success: "Success", attention: "Attention", error: "Error", unavailable: "Unavailable", info: "Information",
 };
 
-type ViewControl = SettingsControl | "customize";
+export type ViewControl = SettingsControl | "customize" | "add-project" | "remove-project" | `project:${string}` | ProjectField | "apply-project" | "cancel-project" | "cancel-removal" | "confirm-removal";
 export class SettingsNavigation {
-  section: "appearance" | "general" | "colors" = "appearance";
+  section: "appearance" | "projects" | "general" | "colors" | "project-form" | "project-remove" = "appearance";
   control: ViewControl = "preset";
   help = false;
   helpOffset = 0;
+  identityOffset = 0;
   private returnControl: ViewControl = "preset";
+  projects: ProjectRegistrations | null = null;
   get fields(): ViewControl[] {
+    if (this.section === "project-form") return [...projectFields];
+    if (this.section === "project-remove") return [];
+    if (this.section === "projects") return ["add-project", ...(this.projects?.entries.map(entry => `project:${entry.id}` as const) ?? []), ...(this.projects?.selected ? ["remove-project"] as const : [])];
     return this.section === "colors" ? colorGroups.flatMap(group => [...group.tokens])
       : this.section === "general" ? ["terminal"] : ["preset", "customize"];
   }
-  get actions(): ViewControl[] { return ["save", "cancel", ...(this.section === "general" ? [] : ["reset"] as const), "reload"]; }
-  get controls(): ViewControl[] { return [...this.fields, ...this.actions]; }
+  get actions(): ViewControl[] {
+    if (this.section === "project-form") return ["apply-project", "cancel-project"];
+    if (this.section === "project-remove") return ["cancel-removal", "confirm-removal"];
+    if (this.section === "projects") return ["save", "cancel", "reload", ...(this.projects?.selected ? ["remove-project"] as const : [])];
+    return ["save", "cancel", ...(this.section === "general" ? [] : ["reset"] as const), "reload"];
+  }
+  get controls(): ViewControl[] { return [...new Set([...this.fields, ...this.actions])]; }
   sync(session: SettingsSession): void {
-    if (this.control !== "customize") session.focus = settingsControls.indexOf(this.control);
+    this.projects = session.projects;
+    if (this.control.startsWith("project:")) session.projects.selectedId = this.control.slice(8);
+    if (session.projects.form && projectFields.includes(this.control as ProjectField)) session.projects.form.field = this.control as ProjectField;
+    if (this.section === "project-remove") session.projects.removeFocused = this.control === "confirm-removal";
+    const index = settingsControls.indexOf(this.control as SettingsControl);
+    if (index >= 0) session.focus = index;
   }
   move(direction: "up" | "down" | "left" | "right", session: SettingsSession): void {
     if (direction === "left" || direction === "right") {
-      if (this.section === "colors") return;
-      this.section = direction === "left" ? "appearance" : "general";
-      this.control = this.fields[0]!;
+      if (this.section === "colors" || this.section === "project-form" || this.section === "project-remove") return;
+      const sections = ["appearance", "projects", "general"] as const;
+      const index = sections.indexOf(this.section);
+      this.section = sections[Math.max(0, Math.min(2, index + (direction === "left" ? -1 : 1)))]!;
+      this.control = this.section === "projects" ? this.projectControl(session) : this.fields[0]!;
+      if (this.section === "projects" && !session.error) session.message = "Enter to edit. Save writes draft.";
     } else {
       const index = this.controls.indexOf(this.control);
       this.control = this.controls[Math.max(0, Math.min(this.controls.length - 1, index + (direction === "up" ? -1 : 1)))]!;
@@ -48,13 +68,20 @@ export class SettingsNavigation {
   tab(backwards: boolean, session: SettingsSession): void {
     const index = this.actions.indexOf(this.control);
     if (index < 0) this.returnControl = this.control;
-    const field = this.fields.includes(this.returnControl) ? this.returnControl : this.fields[0]!;
+    const field = this.fields.includes(this.returnControl) ? this.returnControl : this.section === "projects" ? this.projectControl(session) : this.fields[0]!;
     this.control = index < 0 ? this.actions[backwards ? this.actions.length - 1 : 0]!
       : backwards ? index === 0 ? field : this.actions[index - 1]!
       : index === this.actions.length - 1 ? field : this.actions[index + 1]!;
     this.sync(session);
   }
   openColors(session: SettingsSession): void { this.section = "colors"; this.control = "background"; this.sync(session); }
+  projectControl(session: SettingsSession): ViewControl { return session.projects.selected ? `project:${session.projects.selected.id}` : "add-project"; }
+  showProjects(session: SettingsSession): void { this.section = "projects"; this.control = this.projectControl(session); this.sync(session); }
+  moveForm(direction: number, session: SettingsSession): void {
+    const index = this.controls.indexOf(this.control);
+    this.control = this.controls[(index + direction + this.controls.length) % this.controls.length]!;
+    this.sync(session);
+  }
   back(session: SettingsSession): boolean {
     if (this.help) { this.help = false; return true; }
     if (this.section !== "colors") return false;
@@ -137,8 +164,9 @@ export class SettingsView {
   private feedback: TextRenderable;
   private hints: TextRenderable;
   private offset = 0;
+  private projectsView: ProjectSettingsView;
 
-  constructor(private renderer: CliRenderer) {
+  constructor(private renderer: CliRenderer, onProjectInput: () => void = () => {}) {
     const box = (options: ConstructorParameters<typeof BoxRenderable>[1] = {}) => new BoxRenderable(renderer, { flexDirection: "column", flexShrink: 0, ...options });
     const text = (height = 1) => new TextRenderable(renderer, { height, flexShrink: 0, wrapMode: "none" });
     this.root = box({ width: "100%", height: "100%", visible: false });
@@ -169,8 +197,10 @@ export class SettingsView {
     });
     this.scrollHint = text(); this.colors.add(this.scrollHint);
     this.help = text(); this.body.add(this.help);
+    this.projectsView = new ProjectSettingsView(renderer, onProjectInput);
+    this.body.add(this.projectsView.root);
     this.actionDivider = text(); this.actionRow = box({ flexDirection: "row", height: 1 });
-    this.actionNodes = new Map(["save", "cancel", "reset", "reload"].map(control => {
+    this.actionNodes = new Map(["save", "cancel", "reset", "reload", "apply-project", "cancel-project", "cancel-removal", "confirm-removal"].map(control => {
       const node = text(); this.actionRow.add(node); return [control as ViewControl, node];
     }));
     this.feedback = text(2); this.hints = text(2);
@@ -185,6 +215,7 @@ export class SettingsView {
     this.content.paddingX = g.padding;
     this.heading.height = g.headingHeight; this.tabs.height = g.tabsHeight;
     if (!session || !theme || width < 42 || height < 18) {
+      this.projectsView.suspendInput();
       this.heading.content = "WOLF DEN / SETTINGS";
       this.tabs.content = !theme ? "Loading Settings…\nEsc Back" : "Resize to at least 42 × 18.\nEsc Back · Ctrl+C Quit";
       this.body.visible = this.actionRow.visible = this.actionDivider.visible = this.feedback.visible = this.hints.visible = false;
@@ -197,27 +228,38 @@ export class SettingsView {
     this.hints.height = g.hintsHeight;
     this.heading.fg = theme.heading; this.tabs.fg = theme.textSecondary;
     const w = g.innerWidth, wm = this.renderer.widthMethod;
+    navigation.projects = session.projects;
+    if (!navigation.controls.includes(navigation.control)) {
+      navigation.control = navigation.section === "projects" ? navigation.projectControl(session) : navigation.fields[0] ?? navigation.actions[0]!;
+      navigation.sync(session);
+    }
     const fit = (value: string, columns = w) => clip(value, columns, wm);
-    const status = session.busy ? "Saving…" : session.dirty ? "Unsaved" : "Saved";
-    const title = navigation.section === "colors" ? "APPEARANCE / COLORS" : "WOLF DEN / SETTINGS";
-    this.heading.content = new StyledText([bold(fg(theme.heading)(title)), fg(session.dirty ? theme.attention : theme.success)(" ".repeat(Math.max(1, w - title.length - status.length)) + status)]);
-    this.tabs.content = navigation.section === "colors" ? "Esc Back to Appearance" : new StyledText([
+    const status = session.busy ? session.checkingProject ? "Checking…" : "Saving…" : session.dirty || session.projects.formDirty ? "Unsaved" : "Saved";
+    const title = navigation.section === "colors" ? "APPEARANCE / COLORS" : navigation.section === "project-form" ? `PROJECTS / ${session.projects.form?.id === undefined ? "ADD" : "EDIT"} PROJECT` : navigation.section === "project-remove" ? "PROJECTS / REMOVE FROM DEN" : "WOLF DEN / SETTINGS";
+    this.heading.content = new StyledText([bold(fg(theme.heading)(title)), fg(session.dirty || session.projects.formDirty ? theme.attention : theme.success)(" ".repeat(Math.max(1, w - title.length - status.length)) + status)]);
+    this.tabs.content = navigation.section === "colors" ? "Esc Back to Appearance" : navigation.section === "project-form" || navigation.section === "project-remove" ? "Esc Back to Projects" : new StyledText([
       navigation.section === "appearance" ? bold(fg(theme.accent)("[Appearance]")) : fg(theme.textMuted)(" Appearance "),
-      navigation.section === "general" ? bold(fg(theme.accent)("  [General]")) : fg(theme.textMuted)("   General"),
+      navigation.section === "projects" ? bold(fg(theme.accent)(" [Projects]")) : fg(theme.textMuted)("  Projects "),
+      navigation.section === "general" ? bold(fg(theme.accent)(" [General]")) : fg(theme.textMuted)("  General"),
     ]);
-    const feedback = session.confirmation === "reset" ? "Reset all appearance colors? Enter confirms; Esc keeps draft. Save keeps the reset."
+    const form = session.projects.form;
+    const fieldError = form?.errors[form.field];
+    const feedback = session.projects.discardingForm ? "Discard this form? Enter discards; Esc keeps editing."
+      : session.confirmation === "reset" ? "Reset all appearance colors? Enter confirms; Esc keeps draft. Save keeps the reset."
       : session.confirmation === "discard" ? "Discard unsaved changes and return? Enter discards; Esc keeps editing."
       : session.confirmation === "reload" ? "Discard draft and reload registry? Enter confirms; Esc keeps editing."
-      : session.busy ? "Saving settings…"
+      : session.busy ? session.checkingProject ? "Checking directory…" : "Saving settings…"
+      : navigation.section === "project-form" ? fieldError ?? (form?.editing ? "Enter accepts; Esc cancels field. Tab moves to the next field." : "Apply to draft; Save in Projects writes it.")
+      : navigation.section === "project-remove" ? "Cancel keeps this registration."
       : session.editing ? session.error ? "Use six hex digits after #. Enter accepts; Esc restores the previous color." : "Live preview. Enter accepts; Esc restores the previous color."
       : session.message;
     const feedbackLines = settingsFeedbackLines(feedback, w, wm);
     // Long persistence/conflict messages borrow body rows, never the action/hint rows.
-    const feedbackHeight = Math.min(Math.max(g.feedbackMinimum, feedbackLines.length), g.bodyHeight - 3);
+    const feedbackHeight = Math.min(Math.max(g.feedbackMinimum, feedbackLines.length), Math.max(g.feedbackMinimum, g.bodyHeight - (navigation.section.startsWith("project") ? 7 : 3)));
     const bodyHeight = g.bodyHeight - (feedbackHeight - g.feedbackMinimum);
     this.body.height = bodyHeight;
     this.feedback.height = feedbackHeight;
-    this.feedback.fg = session.error ? theme.error : session.confirmation ? theme.attention : theme.textSecondary;
+    this.feedback.fg = session.error || fieldError ? theme.error : session.confirmation || session.projects.discardingForm ? theme.attention : theme.textSecondary;
     const visibleFeedback = feedbackLines.slice(0, feedbackHeight);
     if (feedbackLines.length > feedbackHeight) visibleFeedback[feedbackHeight - 1] = fit(visibleFeedback[feedbackHeight - 1]! + " …");
     this.feedback.content = visibleFeedback.join("\n");
@@ -227,6 +269,8 @@ export class SettingsView {
     this.general.visible = !navigation.help && navigation.section === "general";
     this.colors.visible = !navigation.help && navigation.section === "colors";
     this.help.visible = navigation.help;
+    this.projectsView.root.visible = !navigation.help && navigation.section.startsWith("project");
+    this.projectsView.update(session, navigation, w, Math.max(1, bodyHeight - g.bodyPadding), g, fit, value => settingsFeedbackLines(value, w, wm));
     this.preset.height = 2 + g.sectionGap;
     this.preset.content = new StyledText([bold(fg(theme.heading)("THEME PRESET\n")), line(themeLabels[session.themeId], navigation.control === "preset")]);
     this.previewLabel.content = new StyledText([bold(fg(theme.heading)("COCKPIT PREVIEW")), fg(theme.textMuted)(" · SAMPLE")]);
@@ -237,13 +281,13 @@ export class SettingsView {
     this.general.content = new StyledText([bold(fg(theme.heading)("TERMINAL PREFERENCE\n" + "\n".repeat(g.sectionGap))), line(session.terminal === "system" ? "System default" : session.terminal, navigation.control === "terminal"), fg(theme.textSecondary)("\n\n" + fit("Used when opening a project terminal.") + "\nTakes effect after Save.")]);
     this.groupHeading.height = g.groupHeadingHeight;
     this.updateColors(session, navigation, Math.max(1, bodyHeight - g.bodyPadding - g.groupHeadingHeight - 1), w, g.groupSpacing, fit);
-    const help = ["SETTINGS HELP", "↑/↓ Move · ←/→ Appearance/General", "Tab / Shift+Tab: actions / return", "Enter edits or activates", "Colors: type six hex digits after #", "Enter accepts; Esc cancels color edit", "Esc Colors: back, draft retained", "* marks a custom color override", "Save writes Appearance + General", "Cancel exits; confirms draft discard", "Reset: confirm, preview, then Save", "Reload: confirm discard, read disk", "PgUp/PgDn scroll · ? closes help", "Esc returns · Ctrl+C quits"];
+    const help = ["SETTINGS HELP", "←/→ Appearance / Projects / General", "↑/↓ Move · Enter edits or activates", "Tab / Shift+Tab: actions / return", "Projects: Enter registration to edit", "Shift+Tab from row: Remove from Den", "Forms: Enter edits/accepts a field", "Tab accepts field and moves forward", "Esc cancels field; then backs out", "Apply/removal updates draft only", "Save writes all Settings sections", "Remove: Cancel is selected first", "PgUp/PgDn: long removal identity", "Files, Git, GitHub remain untouched", "Colors: type six hex digits after #", "Esc Colors: back, draft retained", "* marks a custom color override", "Cancel exits; confirms draft discard", "Reset: confirm, preview, then Save", "Reload: confirm discard, read disk", ...settingsFeedbackLines(session.message, w, wm), "PgUp/PgDn scroll · ? closes help", "Esc returns · Ctrl+C quits"];
     const helpHeight = bodyHeight - g.bodyPadding;
     navigation.helpOffset = Math.min(navigation.helpOffset, Math.max(0, help.length - helpHeight));
     this.help.height = helpHeight; this.help.fg = theme.textSecondary;
     this.help.content = help.slice(navigation.helpOffset, navigation.helpOffset + helpHeight).map(value => fit(value)).join("\n");
     this.actionDivider.fg = theme.divider; this.actionDivider.content = "\n".repeat(g.dividerHeight - 1) + "─".repeat(w);
-    const actionLabels = { save: g.compact ? "Save" : "Save changes", cancel: "Cancel", reset: g.compact ? "Reset" : "Reset appearance", reload: "Reload" };
+    const actionLabels = { save: g.compact ? "Save" : "Save changes", cancel: "Cancel", reset: g.compact ? "Reset" : "Reset appearance", reload: "Reload", "apply-project": "Apply to draft", "cancel-project": "Cancel edit", "cancel-removal": "Cancel", "confirm-removal": "Remove from draft" };
     for (const [control, node] of this.actionNodes) {
       node.visible = navigation.actions.includes(control);
       const label = actionLabels[control as keyof typeof actionLabels];
@@ -251,7 +295,9 @@ export class SettingsView {
       node.content = new StyledText([navigation.control === control ? selected(`> ${label} `, true) : fg(control === "save" ? theme.accent : theme.textSecondary)(`  ${label}  `)]);
     }
     this.hints.fg = theme.textMuted;
-    const hints = navigation.help ? "PgUp/PgDn Scroll\n? Close help · Esc Back" : session.editing ? "Type #RRGGBB · Backspace corrects\nEnter Accept · Esc Cancel edit" : navigation.section === "colors"
+    const hints = navigation.help ? "PgUp/PgDn Scroll\n? Close help · Esc Back" : navigation.section === "project-form" ? "Tab Next · Shift+Tab Previous\nEnter Accept/Edit · Esc Back/Cancel"
+      : navigation.section === "project-remove" ? "Tab Choose · Enter · PgUp/PgDn Identity\nEsc Cancel · ? Help"
+      : session.editing ? "Type #RRGGBB · Backspace corrects\nEnter Accept · Esc Cancel edit" : navigation.section === "colors"
       ? "↑↓ Move · Enter Edit · Tab Actions\nPgUp/PgDn Scroll · Esc Back · ? Help"
       : "↑↓ Move · Enter Choose · Tab Actions\n←→ Section · Esc Back · ? Help";
     this.hints.content = (g.hintsHeight > 2 ? "\n" : "") + hints;
