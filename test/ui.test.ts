@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { measureEditText } from "@opentui/core";
 import { ProjectActions } from "../src/actions.js";
-import { clampSelection, dashboardLayout, detailLines, feedbackForSelection, fitLine, isProjectActionKey, moveProjectSelection, moveSelection, navigatorContent, navigatorEntry, navigatorHeadingHeight, navigatorHeadingText, navigatorRow, navigatorView, projectActionForKey, projectLoadNotice, scrollToLine, visibleWindow } from "../src/ui.js";
+import { clampSelection, dashboardLayout, detailLines, detailToneColor, detailViewport, feedbackColor, feedbackForSelection, fitBranch, fitLine, isProjectActionKey, moveProjectSelection, moveSelection, navigatorContent, navigatorEntry, navigatorHeadingHeight, navigatorHeadingText, navigatorRow, navigatorView, nextPrSelection, projectActionForKey, projectLoadNotice, radarContent, radarSummary, scrollToLine, scrollToSelectedPr, shortcutFooter, visibleWindow } from "../src/ui.js";
+import { resolveTheme } from "../src/theme.js";
 import type { ProjectState } from "../src/domain.js";
 
 test("wide layout keeps separate panels and fixed feedback rows", () => {
@@ -50,12 +51,14 @@ test("selected PR stays in details while loading and stale remote state remains 
   };
   const loading = detailLines(state, 0);
   assert.match(loading.lines.join("\n"), /Loading · previous data below/);
-  assert.match(loading.lines[loading.selectedLine]!, /▌ #9 Layout/);
+  assert.match(loading.lines[loading.selectedLine]!, /▌ #9 \[open\] Layout/);
+  assert.match(loading.lines[loading.selectedLine + 1]!, /Review .+ \(previous\)/);
+  assert.doesNotMatch(loading.lines.join("\n"), /SELECTED PR #/);
   state.github = { kind: "stale", previous, reason: "Offline" };
-  assert.match(detailLines(state, 0).lines.join("\n"), /Stale · Offline.*2 open issues.*\(previous\)/s);
+  assert.match(detailLines(state, 0).lines.join("\n"), /Stale · Offline.*Issues 2 open \(previous\)/s);
   state.github = { kind: "unavailable", reason: "Not configured" };
   assert.match(detailLines(state, -1).lines.join("\n"), /Unavailable · Not configured/);
-  assert.match(detailLines(undefined, -1).lines[0]!, /No projects configured/);
+  assert.match(detailLines(undefined, -1).lines[0]!, /No projects registered.*Press s/);
 });
 
 test("navigation stays at zero before projects load and with an empty registry", () => {
@@ -77,7 +80,7 @@ test("t routes to terminal and o is no longer an action key", async () => {
     };
     assert.equal(isProjectActionKey("t"), true);
     assert.equal(isProjectActionKey("o"), false);
-    const hints = detailLines(state, -1, 80).lines.join("\n");
+    const hints = shortcutFooter(80, false, state, -1);
     assert.match(hints, /t terminal/);
     assert.doesNotMatch(hints, /o terminal/);
     const result = projectActionForKey("t", actions, state, -1);
@@ -97,6 +100,31 @@ test("navigation clamps to the available project range", () => {
   assert.deepEqual(moveProjectSelection(1, 2, 3, "down"), { selected: 2, selectedPr: -1 });
   assert.deepEqual(moveProjectSelection(2, 2, 3, "down"), { selected: 2, selectedPr: 2 });
   assert.deepEqual(moveProjectSelection(0, -1, 0, "down"), { selected: 0, selectedPr: -1 });
+});
+
+test("PR selection starts at the first entry, cycles, and handles zero or one PR", () => {
+  assert.equal(nextPrSelection(-1, 3), 0);
+  assert.equal(nextPrSelection(0, 3), 1);
+  assert.equal(nextPrSelection(2, 3), 0);
+  assert.equal(nextPrSelection(-1, 1), 0);
+  assert.equal(nextPrSelection(0, 1), 0);
+  assert.equal(nextPrSelection(-1, 0), -1);
+});
+
+test("p requires a selected live PR and never substitutes a cached URL", async () => {
+  const state = projectState(0);
+  state.project.repository = "example/repo";
+  const pr = { number: 7, title: "Selected", url: "https://github.com/example/repo/pull/7", review: null, checks: null, draft: false };
+  state.github = { kind: "available", issues: 0, pullRequests: [pr] };
+  const opened: string[] = [];
+  const actions = new ProjectActions(async (_executable, args) => { opened.push(args[0]!); }, { DISPLAY: ":0" });
+  await assert.rejects(projectActionForKey("p", actions, state, -1).action, /Select an available PR/);
+  assert.deepEqual(opened, []);
+  await projectActionForKey("p", actions, state, 0).action;
+  assert.deepEqual(opened, [pr.url]);
+  state.github = { kind: "stale", previous: { kind: "available", issues: 0, pullRequests: [pr] }, reason: "Offline" };
+  await assert.rejects(projectActionForKey("p", actions, state, 0).action, /Select an available PR/);
+  assert.deepEqual(opened, [pr.url]);
 });
 
 function projectState(index: number): ProjectState {
@@ -129,7 +157,7 @@ test("twelve project viewport retains selected row across navigation and resizin
   const states = Array.from({ length: 12 }, (_, index) => projectState(index));
   for (const [width, height] of [[120, 24], [40, 15], [30, 9], [88, 8]]) {
     const layout = dashboardLayout(width!, height!, states.length);
-    const rows = layout.navigatorHeight - navigatorHeadingHeight(layout.wide, layout.navigatorHeight);
+    const rows = layout.navigatorHeight - navigatorHeadingHeight(layout.wide, layout.navigatorHeight) - layout.radarHeight;
     for (let selected = 0; selected < states.length; selected++) {
       const view = navigatorView(states, selected, rows, layout.navigatorWidth, "unicode-wide");
       assert.ok(view.start <= selected && selected < view.start + view.capacity);
@@ -173,9 +201,67 @@ test("navigator heading keeps project count at the right edge", () => {
   assert.equal(measureEditText(heading, { widthMethod: "unicode-wide" }), 42);
   assert.equal(navigatorHeadingText(1, 42).trimEnd().endsWith("1 project"), true);
   assert.equal(navigatorHeadingText(20, 8), "PROJECTS");
-  assert.equal(navigatorHeadingHeight(true, 17), 2);
+  assert.equal(navigatorHeadingHeight(true, 17), 1);
   assert.equal(navigatorHeadingHeight(true, 5), 1);
   assert.equal(navigatorHeadingHeight(false, 17), 0);
+});
+
+test("radar uses only loaded Git states and keeps unknown states distinct", () => {
+  assert.equal(radarSummary([]), "No projects configured");
+  assert.equal(radarSummary([projectState(0)]), "1 clean");
+  const states = Array.from({ length: 5 }, (_, index) => projectState(index));
+  states[2]!.git = { kind: "loading" };
+  states[3]!.git = { kind: "stale", previous: states[0]!.git as Extract<ProjectState["git"], { kind: "available" }>, reason: "Offline" };
+  states[4]!.git = { kind: "unavailable", reason: "Missing" };
+  assert.equal(radarSummary(states), "1 dirty · 1 unavailable · 1 clean · 1 loading · 1 stale");
+  assert.equal(radarSummary(states.slice(2)), "1 unavailable · 1 loading · 1 stale");
+});
+
+test("wide radar reserves a bottom summary and keeps its counts within the panel", () => {
+  const states = [projectState(0), projectState(1)];
+  states[1]!.git = { kind: "unavailable", reason: "Missing" };
+  const layout = dashboardLayout(120, 32, states.length);
+  assert.equal(layout.radarHeight, 3);
+  assert.ok(layout.navigatorHeight - navigatorHeadingHeight(layout.wide, layout.navigatorHeight) - layout.radarHeight >= 1);
+  const content = radarContent(states, layout.navigatorWidth, "unicode-wide");
+  assert.match(content.chunks.map(chunk => chunk.text).join(""), /GIT STATUS · LOADED.*1 unavailable.*1 clean/s);
+  assert.ok(content.chunks.some(chunk => chunk.text.includes("unavailable") && chunk.fg?.toInts().slice(0, 3).join() === "185,199,217"));
+  assert.equal(dashboardLayout(42, 18, 2).radarHeight, 0);
+});
+
+test("middle branch clipping retains its prefix and final identifier", () => {
+  const branch = "feature/navigation/issue-23";
+  const clipped = fitBranch(branch, 17, "unicode-wide");
+  assert.match(clipped, /^feature.*….*-23$/);
+  assert.equal(measureEditText(clipped, { widthMethod: "unicode-wide" }), 17);
+  assert.equal(fitBranch(branch, 5, "unicode-wide"), "feat…");
+  const state = projectState(0);
+  state.git = { ...state.git as Extract<ProjectState["git"], { kind: "available" }>, branch };
+  const entry = navigatorEntry(state, 30, true, "unicode-wide");
+  assert.match(entry.metadataLine, /⎇ feature.*….*-23.*clean$/);
+});
+
+test("five target terminal sizes retain selected entry, bounded text and workbench hierarchy", () => {
+  const states = Array.from({ length: 18 }, (_, index) => projectState(index));
+  states[17]!.project.nextAction = "Review the current change";
+  for (const [width, height] of [[120, 32], [100, 25], [80, 24], [56, 22], [42, 18]]) {
+    const layout = dashboardLayout(width!, height!, states.length);
+    const headingRows = navigatorHeadingHeight(layout.wide, layout.navigatorHeight);
+    const rows = layout.navigatorHeight - headingRows - layout.radarHeight;
+    const view = navigatorView(states, 17, rows, layout.navigatorWidth, "unicode-wide");
+    assert.ok(view.start <= 17 && 17 < view.start + view.capacity);
+    assert.equal(view.entries.filter(entry => entry.selected).length, 1);
+    assert.ok(view.entries.every(entry => "nameLine" in entry
+      ? measureEditText(entry.nameLine, { widthMethod: "unicode-wide" }) === layout.navigatorWidth && measureEditText(entry.metadataLine, { widthMethod: "unicode-wide" }) === layout.navigatorWidth
+      : measureEditText(entry.text, { widthMethod: "unicode-wide" }) <= layout.navigatorWidth));
+    const detail = detailLines(states[17], -1, layout.detailWidth, "unicode-wide");
+    assert.equal(detail.rows[0]!.tone, "title");
+    assert.ok(detail.rows.findIndex(row => row.text.includes("NEXT ACTION")) < detail.rows.findIndex(row => row.text.includes("LOCAL GIT")));
+    assert.ok(detail.rows.findIndex(row => row.text.includes("LOCAL GIT")) < detail.rows.findIndex(row => row.text.includes("GITHUB")));
+    assert.ok(detail.rows.some(row => row.surface === "alt" && row.spans?.some(span => span.tone === "action" && span.text.includes("Review the current change"))));
+    assert.ok(detail.lines.map(line => fitLine(line, layout.detailWidth, "unicode-wide")).every(line => measureEditText(line, { widthMethod: "unicode-wide" }) <= layout.detailWidth));
+    assert.ok(layout.detailHeight > 0);
+  }
 });
 
 test("viewport keeps complete two-line entries and uses single-line fallback for short windows", () => {
@@ -197,10 +283,35 @@ test("viewport keeps complete two-line entries and uses single-line fallback for
 test("selected project highlight covers both lines and stops before the next entry", () => {
   const view = navigatorView([projectState(0), projectState(1)], 0, 6, 32, "unicode-wide");
   const content = navigatorContent(view, 32, "unicode-wide");
-  const selected = content.chunks.filter(chunk => chunk.bg?.toInts().slice(0, 3).join() === "41,70,92");
+  const selected = content.chunks.filter(chunk => chunk.bg?.toInts().slice(0, 3).join() === "41,77,112");
   assert.equal(selected.map(chunk => chunk.text).join(""), (view.entries[0] as ReturnType<typeof navigatorEntry>).nameLine + "\n" + (view.entries[0] as ReturnType<typeof navigatorEntry>).metadataLine);
   assert.ok(content.chunks.some(chunk => chunk.text.includes("Project 1") && !chunk.bg));
   assert.ok(content.chunks.some(chunk => chunk.text.includes("Project 0") && ((chunk.attributes ?? 0) & 1) !== 0));
+});
+
+test("semantic overrides reach navigator selection, statuses and detail feedback", () => {
+  const theme = resolveTheme("wolfy-dark", { selectionBackground: "#405060", success: "#AABBCC", error: "#DDEEFF", heading: "#ABCDEF", divider: "#445566", panelAlt: "#223344" });
+  const view = navigatorView([projectState(0), projectState(2)], 1, 4, 32, "unicode-wide");
+  const content = navigatorContent(view, 32, "unicode-wide", "PROJECTS", 0, theme);
+  assert.ok(content.chunks.some(chunk => chunk.bg?.toInts().slice(0, 3).join() === "64,80,96"));
+  assert.ok(content.chunks.some(chunk => chunk.text.includes("clean") && chunk.fg?.toInts().slice(0, 3).join() === "170,187,204"));
+  assert.ok(content.chunks.some(chunk => chunk.text.includes("PROJECTS") && chunk.fg?.toInts().slice(0, 3).join() === "171,205,239"));
+  assert.equal(detailToneColor("good", theme), theme.success);
+  assert.equal(detailToneColor("error", theme), theme.error);
+  assert.equal(detailToneColor("unavailable", theme), theme.unavailable);
+  assert.equal(detailToneColor("accent", theme), theme.accent);
+  assert.equal(detailToneColor("accentSubtle", theme), theme.accentSubtle);
+  assert.equal(detailToneColor("divider", theme), theme.divider);
+  assert.equal(detailToneColor("action", theme), theme.textPrimary);
+  assert.equal(feedbackColor("error", theme), theme.error);
+  assert.equal(feedbackColor("loading", theme), theme.info);
+  const dirty = projectState(1);
+  const detail = detailLines(dirty, -1);
+  assert.ok(detail.rows[0]!.spans?.some(span => span.tone === "title" && span.strong));
+  assert.ok(detail.rows.some(row => row.surface === "alt" && row.spans?.some(span => span.tone === "divider")));
+  assert.ok(detail.rows.some(row => row.text.includes("Dirty") && row.spans?.some(span => span.tone === "warn")));
+  dirty.project.nextAction = "Review PR";
+  assert.ok(detailLines(dirty, -1).rows.some(row => row.spans?.some(span => span.tone === "action" && span.text.includes("Review PR"))));
 });
 
 test("long Unicode names clip safely in narrow navigator rows", () => {
@@ -249,29 +360,140 @@ test("detail hierarchy preserves manual action and separates local and remote st
   state.git = { kind: "available", branch: "feature/details", detached: false, staged: true, unstaged: false, untracked: true, clean: false };
   state.github = { kind: "unavailable", reason: "Offline" };
   const view = detailLines(state, -1, 48, "unicode-wide");
-  assert.deepEqual(view.lines.filter(line => /NEXT ACTION|LOCAL GIT|GITHUB/.test(line)).map(line => line.trim()), ["NEXT ACTION", "LOCAL GIT", "GITHUB"]);
-  assert.ok(view.lines.includes("    Review  界界  this exact task"));
-  assert.match(view.lines.join("\n"), /Branch feature\/details  ·  Dirty.*staged · untracked.*GITHUB.*Unavailable · Offline/s);
-  assert.ok(view.rows.some(row => row.tone === "error"));
+  assert.deepEqual(view.lines.filter(line => /NEXT ACTION|LOCAL GIT|GITHUB/.test(line)).map(line => line.includes("NEXT ACTION") ? "NEXT ACTION" : line.trim()), ["NEXT ACTION", "LOCAL GIT", "GITHUB"]);
+  assert.ok(view.lines.some(line => line.includes("Review  界界  this exact task")));
+  assert.match(view.lines.join("\n"), /Branch feature\/details.*● Dirty.*staged · untracked.*GITHUB.*Unavailable · Offline/s);
+  assert.ok(view.rows.some(row => row.tone === "unavailable"));
   state.git = { kind: "available", branch: "abc123", detached: true, staged: false, unstaged: false, untracked: false, clean: true };
-  assert.match(detailLines(state, -1).lines.join("\n"), /Detached HEAD  ·  Clean/);
+  assert.match(detailLines(state, -1).lines.join("\n"), /Detached HEAD.*● Clean/s);
 });
 
-test("long Unicode detail and PR entries wrap within compact width", () => {
+test("wide workbench pairs local and GitHub zones with bounded rows", () => {
+  const state = projectState(0);
+  state.project.nextAction = "Review the current task";
+  state.github = { kind: "available", issues: 2, pullRequests: [] };
+  const detail = detailLines(state, -1, 77, "unicode-wide", true);
+  assert.ok(detail.lines.some(line => line.includes("LOCAL GIT") && line.includes("GITHUB")));
+  assert.ok(detail.lines.some(line => line.includes("Branch feature/nav") && line.includes("Available")));
+  assert.ok(detail.lines.some(line => line.includes("● Clean") && line.includes("Issues 2 open")));
+  assert.ok(detail.lines.every(line => measureEditText(line, { widthMethod: "unicode-wide" }) <= 77));
+  assert.ok(detail.rows.some(row => row.spans?.some(span => span.tone === "good")));
+  const compact = detailLines(state, -1, 42, "unicode-wide", false);
+  assert.ok(compact.lines.findIndex(line => line.includes("LOCAL GIT")) < compact.lines.findIndex(line => line.includes("GITHUB")));
+  state.project.name = "A very long project identity with 界界 and a final identifier";
+  assert.ok(measureEditText(detailLines(state, -1, 42, "unicode-wide").lines[0]!, { widthMethod: "unicode-wide" }) <= 42);
+});
+
+test("inline selected PR details stay bounded and reachable at target sizes", () => {
   const state = projectState(11);
   state.project.nextAction = "Open the very long task with 界界 and 👩‍💻 today";
   state.github = { kind: "available", issues: 4, pullRequests: Array.from({ length: 12 }, (_, index) => ({
     number: index + 1, title: `Long pull request title ${index} 界界 👩‍💻 with more words`, url: `https://github.com/example/pull/${index + 1}`,
     review: "Changes requested", checks: "Pending", draft: index === 11,
   })) };
-  for (const width of [24, 40, 60]) {
-    const view = detailLines(state, 11, width, "unicode-wide");
-    assert.ok(view.lines.every(line => measureEditText(fitLine(line, width, "unicode-wide"), { widthMethod: "unicode-wide" }) <= width));
-    assert.match(view.lines[view.selectedLine]!, /▌ #12/);
-    assert.match(view.lines.join("\n"), /Review Changes requested  ·  Checks Pending/);
-    assert.equal(scrollToLine(0, view.selectedLine, 5), view.selectedLine - 4);
-    assert.equal(scrollToLine(view.selectedLine - 4, view.selectedLine, 5), view.selectedLine - 4);
+  for (const [width, height] of [[120, 32], [100, 25], [80, 24], [56, 22], [42, 18]]) {
+    const layout = dashboardLayout(width!, height!, 1);
+    const view = detailLines(state, 11, layout.detailWidth, "unicode-wide", layout.wide);
+    assert.ok(view.lines.every(line => measureEditText(fitLine(line, layout.detailWidth, "unicode-wide"), { widthMethod: "unicode-wide" }) <= layout.detailWidth));
+    assert.match(view.lines[view.selectedLine]!, /▌ #12 \[draft\]/);
+    assert.equal(view.lines.filter(line => /Review Changes requested/.test(line)).length, 1);
+    const offset = scrollToSelectedPr(view, 0, layout.detailHeight);
+    const visible = detailViewport(view, offset, layout.detailHeight).rows.map(row => row.text);
+    assert.ok(visible.some(line => /▌ #12 \[draft\]/.test(line)));
+    assert.equal(view.selectedEndLine, view.selectedLine + 2);
+    assert.match(view.lines[view.selectedLine + 1]!, /Review Changes requested/);
+    assert.match(view.lines[view.selectedLine + 2]!, /Checks Pending/);
+    assert.ok(visible.some(line => /Checks Pending/.test(line)));
+    assert.ok(visible.every(line => measureEditText(line, { widthMethod: "unicode-wide" }) <= layout.detailWidth));
   }
+});
+
+test("only the selected PR expands inline with truthful review and check states", () => {
+  const state = projectState(0);
+  state.github = { kind: "available", issues: 1, pullRequests: [
+    { number: 1, title: "Open  PR", url: "https://github.com/example/pull/1", review: null, checks: "no checks", draft: false },
+    { number: 2, title: "Draft 界界 👩‍💻 e\u0301", url: "https://github.com/example/pull/2", review: "REVIEW_REQUIRED", checks: null, draft: true },
+  ] };
+  const open = detailLines(state, 0, 42, "unicode-wide");
+  assert.match(open.lines.join("\n"), /#1 \[open\] Open  PR.*#2 \[draft\] Draft 界界 👩‍💻 e\u0301/s);
+  assert.match(open.lines[open.selectedLine + 1]!, /Review unavailable/);
+  assert.match(open.lines[open.selectedLine + 2]!, /Checks no checks/);
+  assert.equal(open.lines.findIndex(line => line.includes("#2 [draft]")), open.selectedLine + 3);
+  assert.equal(open.lines.filter(line => /Review /.test(line)).length, 1);
+  const draft = detailLines(state, 1, 42, "unicode-wide");
+  assert.match(draft.lines[draft.selectedLine + 1]!, /Review REVIEW_REQUIRED/);
+  assert.match(draft.lines[draft.selectedLine + 2]!, /Checks unavailable/);
+  assert.equal(draft.lines.findIndex(line => line.includes("#1 [open]")), draft.selectedLine - 1);
+  const tinyOffset = scrollToSelectedPr(draft, 0, 2);
+  assert.ok(detailViewport(draft, tinyOffset, 2).rows.some(row => row.text.includes("#2 [draft]")));
+  assert.ok(detailViewport(draft, tinyOffset + 1, 2).rows.some(row => row.text.includes("Checks unavailable")));
+  assert.equal(detailLines(state, -1, 42).selectedEndLine, undefined);
+  state.github = { kind: "available", issues: 1, pullRequests: [] };
+  assert.doesNotMatch(detailLines(state, -1, 42).lines.join("\n"), /SELECTED PR|PULL REQUESTS/);
+});
+
+test("PR cycling scrolls the expanded item without unnecessary viewport jumps", () => {
+  const state = projectState(0);
+  state.github = { kind: "available", issues: 0, pullRequests: Array.from({ length: 8 }, (_, index) => ({
+    number: index + 1, title: `PR ${index + 1}`, url: `https://github.com/example/pull/${index + 1}`,
+    review: "Ready", checks: "no checks", draft: false,
+  })) };
+  let selected = -1;
+  let offset = 0;
+  for (let press = 0; press < 9; press++) {
+    selected = nextPrSelection(selected, 8);
+    const view = detailLines(state, selected, 42);
+    const next = scrollToSelectedPr(view, offset, 5);
+    const visible = detailViewport(view, next, 5);
+    assert.ok(visible.rows.some(row => row.text.includes(`▌ #${selected + 1} [open]`)));
+    assert.ok(visible.rows.some(row => row.text.includes("Checks no checks")));
+    assert.equal(scrollToSelectedPr(view, next, 5), next);
+    offset = next;
+  }
+  assert.equal(selected, 0);
+  const view = detailLines(state, 0, 42);
+  assert.ok(detailViewport(view, scrollToSelectedPr(view, 100, 1), 1).rows[0]!.text.includes("▌ #1 [open]"));
+});
+
+test("PR title clipping preserves graphemes and markers without overflow", () => {
+  const state = projectState(0);
+  state.github = { kind: "available", issues: 0, pullRequests: [
+    { number: 123, title: "Supercalifragilistic 界界 👩‍💻 e\u0301 end", url: "https://github.com/example/pull/123", review: null, checks: null, draft: true },
+  ] };
+  for (const width of [24, 42, 56, 80]) {
+    const view = detailLines(state, 0, width, "unicode-wide");
+    const row = view.lines[view.selectedLine]!;
+    assert.match(row, /#123 \[draft\]/);
+    assert.ok(measureEditText(row, { widthMethod: "unicode-wide" }) <= width);
+    assert.equal(view.lines.filter(line => line.includes("#123 [draft]")).length, 1);
+  }
+});
+
+test("footer uses complete relevant hints at each target width", () => {
+  const state = projectState(0);
+  state.project.repository = "example/repo";
+  state.github = { kind: "available", issues: 0, pullRequests: [
+    { number: 1, title: "A", url: "https://github.com/example/repo/pull/1", review: null, checks: null, draft: false },
+  ] };
+  for (const width of [120, 100, 80, 56, 42]) {
+    const normal = shortcutFooter(width, false, state, -1, "unicode-wide");
+    const selected = shortcutFooter(width, false, state, 0, "unicode-wide");
+    const help = shortcutFooter(width, true, state, 0, "unicode-wide");
+    for (const line of [normal, selected, help]) {
+      assert.ok(measureEditText(line, { widthMethod: "unicode-wide" }) <= width);
+      assert.match(line, /q quit/);
+      assert.match(line, /\? (help|close help)/);
+      assert.doesNotMatch(line, /…/);
+    }
+    assert.match(selected, /p open PR/);
+    assert.doesNotMatch(normal, /p open PR/);
+  }
+  state.github = { kind: "available", issues: 0, pullRequests: [] };
+  assert.doesNotMatch(shortcutFooter(120, false, state, -1), /PR/);
+  state.github = { kind: "stale", previous: { kind: "available", issues: 0, pullRequests: [{ number: 1, title: "A", url: "https://github.com/example/repo/pull/1", review: null, checks: null, draft: false }] }, reason: "Offline" };
+  assert.doesNotMatch(shortcutFooter(120, false, state, 0), /p open PR|Tab select PR/);
+  assert.equal(shortcutFooter(3, false, state, -1), "? q");
+  assert.equal(shortcutFooter(120, false, undefined, -1), "? help · q quit · s settings");
 });
 
 test("delayed feedback is attributed to its project", () => {

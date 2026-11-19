@@ -13,12 +13,32 @@ test("validates registry and expands home paths", () => {
 });
 
 test("registry terminal settings default to system and accept supported overrides", () => {
-  assert.deepEqual(parseConfiguration(valid(), "/home/tester").settings, { terminal: "system" });
+  assert.deepEqual(parseConfiguration(valid(), "/home/tester").settings, { terminal: "system", theme: "wolfy-dark", themeOverrides: {} });
   const configured = JSON.parse(valid());
   configured.settings = { terminal: "kitty" };
-  assert.deepEqual(parseConfiguration(JSON.stringify(configured), "/home/tester").settings, { terminal: "kitty" });
+  assert.deepEqual(parseConfiguration(JSON.stringify(configured), "/home/tester").settings, { terminal: "kitty", theme: "wolfy-dark", themeOverrides: {} });
   configured.settings = {};
-  assert.deepEqual(parseConfiguration(JSON.stringify(configured), "/home/tester").settings, { terminal: "system" });
+  assert.deepEqual(parseConfiguration(JSON.stringify(configured), "/home/tester").settings, { terminal: "system", theme: "wolfy-dark", themeOverrides: {} });
+});
+
+test("version-1 theme selection and overrides preserve terminal preference and projects", () => {
+  const configured = JSON.parse(valid());
+  configured.settings = { terminal: "kitty", theme: "wolfy-dark", themeOverrides: { accent: "#abcdef", selectionBackground: "#304050" } };
+  const result = parseConfiguration(JSON.stringify(configured), "/home/tester");
+  assert.deepEqual(result.settings, configured.settings);
+  assert.equal(result.projects[0]?.path, "/home/tester/work/demo");
+});
+
+test("invalid theme names, override keys and colors identify their settings fields", () => {
+  const configured = JSON.parse(valid());
+  configured.settings = { theme: "unknown" };
+  assert.throws(() => parseConfiguration(JSON.stringify(configured)), /settings.theme: Choose a supported theme: wolfy-dark/);
+  configured.settings = { themeOverrides: { surprise: "#ABCDEF" } };
+  assert.throws(() => parseConfiguration(JSON.stringify(configured)), /settings.themeOverrides/);
+  configured.settings = { themeOverrides: { accent: "red" } };
+  assert.throws(() => parseConfiguration(JSON.stringify(configured)), /settings.themeOverrides.accent: Use a hexadecimal RGB color in #RRGGBB format/);
+  configured.settings = { themeOverrides: { accent: "#1234" } };
+  assert.throws(() => parseConfiguration(JSON.stringify(configured)), /settings.themeOverrides.accent/);
 });
 
 test("unsupported terminal settings are rejected with an actionable field path", () => {

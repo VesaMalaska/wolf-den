@@ -5,7 +5,7 @@
 ## Product goal
 Make it easier to understand project state, identify attention items, and resume development across several independent repositories. Wolf Den is a hybrid: informative dashboard plus a handful of safe quick actions.
 
-## Sources of truth
+## Sources of truth (current behavior)
 | Data | Authority |
 | --- | --- |
 | Project ID, label, directory, lifecycle, next action | Local JSON registry |
@@ -13,7 +13,7 @@ Make it easier to understand project state, identify attention items, and resume
 | Issues, PRs, review/check data where available | GitHub via `gh` |
 | Detailed development plan | Existing project docs, outside Wolf Den |
 
-The next action is manual, **never inferred from a PR**. GitHub statistics are informational and may be stale if refresh fails.
+Today the next action is manual, **never inferred from a PR**. GitHub statistics are informational and may be stale if refresh fails. A later planned producer-owned project status contract is intended to supersede manual Next Action maintenance; it is **not implemented** and does not change the v0.3 source-of-truth rules.
 
 ## Scope — 0.1.0
 - Explicitly configured local projects, no filesystem-wide scanning.
@@ -109,6 +109,58 @@ The implemented navigator uses two-line entries when space allows and one-line e
 - Implement as focused, reviewable PRs; require human approval before merging.
 - Any v0.1 release gate is separate from v0.2 acceptance; this roadmap does not imply a v0.1 release was tagged.
 - Do not tag v0.2 before visual/manual QA and explicit human approval.
+
+## v0.3 — The Wolf's cockpit and configurable den (approved; release QA pending)
+
+**Goal:** A professional, distinctive developer cockpit that answers both *what needs attention across projects* and *what should I do next in the selected project*. Add editable local configuration without mutating Git or GitHub.
+
+The approved direction and architecture are specified in [v0.3 Cockpit UX, themes and editable configuration](V0.3-UX-AND-CONFIG-SPEC.md). This is planned work, not shipped v0.2 behavior.
+
+### Experience goals
+- **Project radar (left):** factual multi-project overview, readable states, aggregate Git signals and optional available GitHub counts. No invented project-health or urgency metric.
+- **Selected project (right):** clear identity, highly visible manual next action, distinct Git and GitHub zones, and less repetitive PR summaries.
+- **PRs and footer:** compact open/draft rows, selected PR detail, useful truncation, contextual keyboard hints and accessible compact modes.
+- **Wolf Den identity:** semantic color tokens; a first built-in, customizable *Wolfy Dark* theme (moonlight, plum, forest, amber). Future presets possible without UI rewrites.
+- **Settings (`s` proposed):** separate Appearance, Projects, General views; safe preview/save/cancel/reset. Existing terminal preference becomes editable. Terminal font selection is **not supported** by the app.
+- **Projects:** add, edit basic metadata, and *Remove from Den* (registry entry only; never delete directories or Git repositories).
+- **Next action:** retain the registry-authored cockpit display; set/change/clear through Settings → Projects without using a JSON editor.
+
+**Scope revision approved by WOLFY on 2026-11-16:** PR #38 merged the Project Manager into `development`, including manual Next Action editing. Defer #28's cockpit shortcut/editor beyond v0.3 to avoid duplicating that flow. Keep #28 open for later reassessment; it is not a release prerequisite. The future Project Status Contract remains separately scoped and unimplemented.
+
+### Architecture and scope rules
+- Extend existing version-1 JSON registry with optional theme fields; preserve existing user configs and the read-only Git/GitHub boundary.
+- Implement validated, atomic, conflict-aware local configuration writes **before** building any feature that saves settings/projects/next actions.
+- Keep Dingu's work small, issue-based and independently reviewable with human PR approval.
+- No database, background sync, auto-discovery, AI agent, task manager, arbitrary repository commands or font picker.
+
+### Implementation issues (in review/dependency order)
+1. [#22 — Theme foundation and Wolfy Dark](https://github.com/VesaMalaska/wolf-den/issues/22) — semantic tokens, preset, backward-compatible read-only config.
+2. [#23 — Cockpit hierarchy and project radar](https://github.com/VesaMalaska/wolf-den/issues/23) — factual multi-project glanceability, next action and status hierarchy; depends on #22.
+3. [#24 — Compact PRs and contextual footer](https://github.com/VesaMalaska/wolf-den/issues/24) — draft/open distinctions, selected PR detail and meaningful help; depends on #23.
+4. [#25 — Safe registry persistence](https://github.com/VesaMalaska/wolf-den/issues/25) — atomic validated writes, conflict detection and non-destructive saves; depends on #22.
+5. [#26 — Settings view](https://github.com/VesaMalaska/wolf-den/issues/26) — Appearance/General, live theme preview/save/reset, terminal setting; depends on #22, #24 and #25.
+6. [#27 — Project manager](https://github.com/VesaMalaska/wolf-den/issues/27) — explicit Add/Edit/Remove from Den; depends on #25 and #26.
+7. [#29 — Real Kitty QA and v0.3 release gate](https://github.com/VesaMalaska/wolf-den/issues/29) — end-to-end acceptance and safe release readiness; depends on #22–#27. Verify manual Next Action through Settings → Projects, including set/change/clear, cancellation, save/restart, failed writes and external edit conflicts.
+
+**Deferred beyond v0.3:** [#28 — Direct next-action editor](https://github.com/VesaMalaska/wolf-den/issues/28). No `n` shortcut/editor is required for v0.3. Reassess its value before scheduling implementation.
+
+**Release gate:** accessible keyboard navigation and readable 120×32, 100×25, 80×24, 56×22 and 42×18 displays; verified safe configuration mutations, failure recovery and real Kitty usability. Tag/release only with explicit owner approval.
+
+## Future initiative — producer-independent project status (direction agreed; not scheduled)
+
+**Outcome:** Replace the need to maintain Next Action manually by passively reading a small, producer-owned project status snapshot. Wolf Den must not know or care whether it was written by HandyLab, TopHat or another workflow. This remains a separately approved future initiative **after v0.3**. v0.3 retains the manual display and Settings → Projects editing; deferring #28 does not implement or change status-source precedence.
+
+See [Project Status Contract & Discovery — future plan](PROJECT-STATUS-CONTRACT-PLAN.md) for responsibilities, acceptance criteria, and unresolved decisions.
+
+### Minimal deliverables
+
+1. A **versioned JSON snapshot contract** with JSON Schema as the portable validation source and derived TypeScript types for projects that want them. Do not require TypeScript to produce valid status.
+2. A **tiny standalone validator CLI** supporting `init` and `validate`; schema validation catches structural mistakes, while the producer remains responsible for truthfulness.
+3. A reusable **Project Status Reporter skill** in the external HandyLab Skills Library, plus explicit human setup instructions to require the skill in the normal agent workflow.
+4. A **read-only Wolf Den consumer** discovering the optional file in each registered project, validating and displaying current work, last completed work, next action, attention needed and freshness. Existing Git/GitHub facts remain independent.
+5. A deliberate **Next Action precedence/migration** design: prefer valid producer-reported actions when available, retain the manual field during transition, and decide fallback behavior before implementation.
+
+**HandyLab philosophy:** dead simple, enough to do the job and nothing more. One snapshot file to start; no event system, background agent monitoring, database, service, orchestration or project auto-discovery. Finalize file path, exact fields, distribution and tracked/ignored policy when implementation is scheduled. Create focused implementation issues only after the contract is reviewed; each needs a separate PR and human approval.
 
 ## Later candidates (not approved for implementation)
 'Where Was I?' resume summary, recent commits, filters/search, cross-repo review queue, optional doc extraction and project discovery. Later ideas: Codex integration, session handovers and notifications. Add only to solve observed needs.

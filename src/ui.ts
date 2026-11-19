@@ -1,8 +1,15 @@
 import { BoxRenderable, TextRenderable, StyledText, bg, bold, fg, createCliRenderer, measureEditText, type KeyEvent, type WidthMethod } from "@opentui/core";
 import { ProjectActions } from "./actions.js";
-import type { ProjectState } from "./domain.js";
-import { GithubRefresh, loadProjectStates } from "./projects.js";
-import { loadConfiguration, RegistryError } from "./registry.js";
+import type { GithubPullRequest, ProjectState } from "./domain.js";
+import { GithubRefresh, loadProjectStates, reconcileProjectStates, retainedProjectId } from "./projects.js";
+import { defaultRegistryPath, loadConfiguration, parseConfiguration, RegistryError, type RegistryConfiguration } from "./registry.js";
+import { RegistryPersistence } from "./registry-persistence.js";
+import { SettingsSession } from "./settings.js";
+import { SettingsNavigation, SettingsView } from "./settings-view.js";
+import { resolveTheme, themeTokens, type SemanticTheme, type ThemeToken } from "./theme.js";
+import { projectFields, type ProjectField } from "./project-registrations.js";
+import type { inspectGit } from "./git.js";
+import type { inspectGithub } from "./github.js";
 
 function safeText(value: string): string { return value.replace(/[\x00-\x1f\x7f-\x9f]/g, " "); }
 
@@ -24,6 +31,22 @@ export function fitLine(value: string, width: number, widthMethod: WidthMethod =
     else high = middle - 1;
   }
   return segments.slice(0, low).join("") + ellipsis;
+}
+
+export function fitBranch(value: string, width: number, widthMethod: WidthMethod = "unicode"): string {
+  const branch = safeText(value);
+  const measure = (text: string) => measureEditText(text, { widthMethod });
+  if (width <= 0) return "";
+  if (measure(branch) <= width || width < 7) return fitLine(branch, width, widthMethod);
+  const parts = Array.from(graphemes.segment(branch), part => part.segment);
+  const suffixBudget = Math.floor((width - 1) / 2);
+  let suffix = "";
+  for (let index = parts.length - 1; index >= 0; index--) {
+    if (measure(parts[index]! + suffix) > suffixBudget) break;
+    suffix = parts[index]! + suffix;
+  }
+  const prefix = fitLine(branch, width - measure(suffix), widthMethod);
+  return prefix.slice(0, -1) + "…" + suffix;
 }
 
 export function visibleWindow(total: number, selected: number, height: number): number {
@@ -48,7 +71,7 @@ export function navigatorRow(state: ProjectState, width: number, selected: boole
   const available = Math.max(0, width - measure(marker));
   let suffix = `  ${status}${remote}`;
   const branchWidth = Math.min(12, available - 10 - measure(`   · ${status}${remote}`));
-  if (branch && branchWidth >= 4) suffix = `  ${fitLine(branch, branchWidth, widthMethod)} · ${status}${remote}`;
+  if (branch && branchWidth >= 4) suffix = `  ${fitBranch(branch, branchWidth, widthMethod)} · ${status}${remote}`;
   if (measure(suffix) > available - 8) suffix = `  ${status}`;
   if (measure(suffix) > available - 4) suffix = "";
   const name = fitLine(state.project.name, available - measure(suffix), widthMethod);
@@ -74,7 +97,10 @@ export function navigatorEntry(state: ProjectState, width: number, selected: boo
   const statusStart = Math.max(measure(marker), width - measure(statusText));
   const leftWidth = Math.max(0, statusStart - measure(metadataMarker) - 2);
   const remoteText = remote && leftWidth >= measure(remote) + 5 ? remote : "";
-  const branchText = fitLine(branch ? `⎇ ${branch}` : git.kind === "loading" ? "Git…" : git.kind === "unavailable" ? "Git n/a" : "", leftWidth - measure(remoteText), widthMethod);
+  const branchWidth = leftWidth - measure(remoteText);
+  const branchText = branch && branchWidth > measure("⎇ ") ? `⎇ ${fitBranch(branch, branchWidth - measure("⎇ "), widthMethod)}`
+    : branch ? fitLine("⎇", branchWidth, widthMethod)
+    : fitLine(git.kind === "loading" ? "Git…" : git.kind === "unavailable" ? "Git n/a" : "", branchWidth, widthMethod);
   const left = metadataMarker + branchText + remoteText;
   const spacing = " ".repeat(Math.max(0, statusStart - measure(left)));
   const metadataLine = fitLine(left + spacing + statusText, width, widthMethod);
@@ -94,8 +120,26 @@ export function navigatorHeadingText(count: number, width: number, widthMethod: 
   return label + " ".repeat(width - measure(label) - measure(total)) + total;
 }
 
+export function radarSummary(states: ProjectState[]): string {
+  let clean = 0, dirty = 0, loading = 0, stale = 0, unavailable = 0;
+  for (const { git } of states) {
+    if (git.kind === "available") git.clean ? clean++ : dirty++;
+    else if (git.kind === "loading") loading++;
+    else if (git.kind === "stale") stale++;
+    else unavailable++;
+  }
+  if (states.length === 0) return "No projects configured";
+  const items: string[] = [];
+  if (dirty) items.push(`${dirty} dirty`);
+  if (unavailable) items.push(`${unavailable} unavailable`);
+  if (clean) items.push(`${clean} clean`);
+  if (loading) items.push(`${loading} loading`);
+  if (stale) items.push(`${stale} stale`);
+  return items.join(" · ");
+}
+
 export function navigatorHeadingHeight(wide: boolean, height: number): number {
-  return wide && height > 1 ? height >= 14 ? 2 : 1 : 0;
+  return wide && height > 1 ? 1 : 0;
 }
 
 export function navigatorView(states: ProjectState[], selected: number, height: number, width: number, widthMethod: WidthMethod = "unicode") {
@@ -111,29 +155,50 @@ export function navigatorView(states: ProjectState[], selected: number, height: 
   return { index, start, entries, twoLine, gap, capacity };
 }
 
-export function navigatorContent(view: ReturnType<typeof navigatorView>, width: number, widthMethod: WidthMethod, heading?: string, headingGap = 0): StyledText {
+export function navigatorContent(view: ReturnType<typeof navigatorView>, width: number, widthMethod: WidthMethod, heading?: string, headingGap = 0, theme: SemanticTheme = resolveTheme(), summary?: string): StyledText {
   const chunks = [];
-  if (heading) chunks.push(fg("#849bab")(fitLine(heading, width, widthMethod) + "\n".repeat(1 + headingGap)));
-  if (view.entries.length === 0) chunks.push(fg("#849bab")(fitLine("No projects configured", width, widthMethod)));
+  if (heading) {
+    chunks.push(fg(theme.heading)(fitLine(heading, width, widthMethod) + "\n"));
+    if (headingGap) chunks.push(fg(theme.textSecondary)(fitLine(summary ?? "", width, widthMethod) + "\n"));
+  }
+  if (view.entries.length === 0) chunks.push(fg(theme.textMuted)(fitLine("No projects configured", width, widthMethod)));
   view.entries.forEach((entry, index) => {
-    if (index > 0) chunks.push(fg("#849bab")("\n".repeat(1 + view.gap)));
-    const selectedBg = entry.selected ? "#29465c" : undefined;
+    if (index > 0) chunks.push(fg(theme.textMuted)("\n".repeat(1 + view.gap)));
+    const selectedBg = entry.selected ? theme.selectionBackground : undefined;
     const styled = (value: string, color: string, strong = false) => {
       const chunk = fg(color)(strong ? bold(value) : value);
       return selectedBg ? bg(selectedBg)(chunk) : chunk;
     };
     if ("nameLine" in entry) {
-      chunks.push(styled(fitLine(entry.marker, width, widthMethod), entry.selected ? "#f7fbff" : "#849bab"));
-      chunks.push(styled(entry.name, entry.selected ? "#f7fbff" : "#d5e4ee", true));
-      chunks.push(styled(entry.namePadding, entry.selected ? "#f7fbff" : "#d5e4ee"));
-      chunks.push(styled("\n", "#849bab"));
-      chunks.push(styled(fitLine(entry.metadataMarker, width, widthMethod) + entry.branchText + entry.remoteText + entry.spacing, entry.selected ? "#b7d0e0" : "#91a8b8"));
-      const statusColor = entry.status === "clean" ? "#9bd6ac" : entry.status === "dirty" ? "#e7bd83" : "#a8b9c7";
-      chunks.push(styled(entry.statusText + entry.metadataPadding, statusColor));
+      chunks.push(styled(fitLine(entry.marker, width, widthMethod), entry.selected ? theme.focusBorder : theme.textMuted));
+      chunks.push(styled(entry.name, entry.selected ? theme.textOnSelection : theme.textPrimary, true));
+      chunks.push(styled(entry.namePadding, entry.selected ? theme.textOnSelection : theme.textPrimary));
+      chunks.push(styled("\n", theme.textMuted));
+      chunks.push(styled(fitLine(entry.metadataMarker, width, widthMethod) + entry.branchText + entry.remoteText + entry.spacing, entry.selected ? theme.textOnSelection : theme.textSecondary));
+      const statusColor = entry.status === "clean" ? theme.success : entry.status === "dirty" ? theme.attention
+        : entry.status === "loading" ? theme.info : entry.status === "stale" ? theme.attention : theme.unavailable;
+      // Selected rows keep a consistently readable foreground; labels and markers retain status meaning.
+      chunks.push(styled(entry.statusText + entry.metadataPadding, entry.selected ? theme.textOnSelection : statusColor));
     } else {
-      chunks.push(styled(entry.text, entry.selected ? "#f7fbff" : entry.status === "dirty" ? "#e4ba78" : "#c6d5df"));
+      chunks.push(styled(entry.text, entry.selected ? theme.textOnSelection : entry.status === "clean" ? theme.success
+        : entry.status === "dirty" || entry.status === "stale" ? theme.attention : entry.status === "loading" ? theme.info : theme.unavailable));
     }
   });
+  return new StyledText(chunks);
+}
+
+export function radarContent(states: ProjectState[], width: number, widthMethod: WidthMethod, theme: SemanticTheme = resolveTheme()): StyledText {
+  const chunks = [fg(theme.divider)("─".repeat(Math.max(0, width)) + "\n"), fg(theme.heading)(fitLine("GIT STATUS · LOADED", width, widthMethod) + "\n")];
+  let used = 0;
+  for (const label of radarSummary(states).split(" · ")) {
+    const part = (used ? "  " : "") + label;
+    const size = measureEditText(part, { widthMethod });
+    if (used + size > width) break;
+    const color = label.includes("dirty") ? theme.attention : label.includes("unavailable") ? theme.unavailable
+      : label.includes("clean") ? theme.success : label.includes("stale") ? theme.attention : label.includes("loading") ? theme.info : theme.textMuted;
+    chunks.push(fg(color)(part));
+    used += size;
+  }
   return new StyledText(chunks);
 }
 
@@ -152,17 +217,53 @@ export function dashboardLayout(width: number, height: number, projectCount: num
     const navigatorWidth = Math.min(42, Math.max(26, Math.floor(columns * 0.34)));
     return { wide, columns, headerHeight, statusHeight, footerHeight, contentHeight,
       navigatorWidth, dividerWidth: 1, detailWidth: columns - navigatorWidth - 1,
-      navigatorHeight: contentHeight, dividerHeight: contentHeight, detailHeight: contentHeight };
+      navigatorHeight: contentHeight, radarHeight: contentHeight >= 14 ? 3 : 0,
+      dividerHeight: contentHeight, detailHeight: contentHeight };
   }
   const navigatorHeight = contentHeight === 0 ? 0 : Math.min(contentHeight, Math.max(1, Math.min(Math.max(2, Math.floor(contentHeight / 3)), Math.max(1, projectCount * 2))));
   const dividerHeight = contentHeight > navigatorHeight + 1 ? 1 : 0;
   return { wide, columns, headerHeight, statusHeight, footerHeight, contentHeight,
     navigatorWidth: columns, dividerWidth: columns, detailWidth: columns,
-    navigatorHeight, dividerHeight, detailHeight: contentHeight - navigatorHeight - dividerHeight };
+    navigatorHeight, radarHeight: 0, dividerHeight, detailHeight: contentHeight - navigatorHeight - dividerHeight };
 }
 
-type DetailTone = "heading" | "title" | "muted" | "normal" | "good" | "warn" | "error" | "selected";
-type DetailRow = { text: string; tone: DetailTone };
+type DetailTone = "heading" | "divider" | "accent" | "accentSubtle" | "action" | "title" | "muted" | "normal" | "good" | "warn" | "error" | "unavailable" | "selected";
+type DetailSpan = { text: string; tone: DetailTone; strong?: boolean };
+type DetailRow = { text: string; tone: DetailTone; spans?: DetailSpan[]; surface?: "alt" };
+type DetailView = { lines: string[]; rows: DetailRow[]; selectedLine: number; selectedEndLine?: number };
+
+function boxEdge(label: string, width: number, bottom = false, widthMethod: WidthMethod = "unicode"): string {
+  if (width < 4) return fitLine(label, width, widthMethod);
+  if (bottom) return `╰${"─".repeat(width - 2)}╯`;
+  const caption = fitLine(`─ ${label} `, width - 2, widthMethod);
+  return `╭${caption}${"─".repeat(Math.max(0, width - 2 - measureEditText(caption, { widthMethod })))}╮`;
+}
+
+function boxBody(value: string, width: number, widthMethod: WidthMethod): string {
+  if (width < 4) return fitLine(value, width, widthMethod);
+  const content = fitLine(value, width - 4, widthMethod);
+  return `│ ${content}${" ".repeat(Math.max(0, width - 4 - measureEditText(content, { widthMethod })))} │`;
+}
+
+function boxBodySpans(value: string, width: number, tone: DetailTone, widthMethod: WidthMethod, borderTone: DetailTone = "divider"): { text: string; tone: DetailTone }[] {
+  if (width < 4) return [{ text: fitLine(value, width, widthMethod), tone }];
+  const content = fitLine(value, width - 4, widthMethod);
+  return [
+    { text: "│ ", tone: borderTone },
+    { text: content, tone },
+    { text: " ".repeat(Math.max(0, width - 4 - measureEditText(content, { widthMethod }))) + " │", tone: borderTone },
+  ];
+}
+
+function boxTopSpans(label: string, width: number, widthMethod: WidthMethod): DetailSpan[] {
+  if (width < 4) return [{ text: fitLine(label, width, widthMethod), tone: "heading", strong: true }];
+  const caption = fitLine(label, width - 4, widthMethod);
+  return [
+    { text: "╭─ ", tone: "divider" },
+    { text: caption, tone: "heading", strong: true },
+    { text: " ".repeat(Math.max(0, width - 4 - measureEditText(caption, { widthMethod }))) + "╮", tone: "divider" },
+  ];
+}
 
 function wrapped(value: string, width: number, widthMethod: WidthMethod): string[] {
   const available = Math.max(1, width);
@@ -179,49 +280,124 @@ function wrapped(value: string, width: number, widthMethod: WidthMethod): string
   return lines;
 }
 
-export function detailLines(state: ProjectState | undefined, selectedPr: number, width = 80, widthMethod: WidthMethod = "unicode"): { lines: string[]; rows: DetailRow[]; selectedLine: number } {
+function prRow(pr: GithubPullRequest, selected: boolean, width: number, widthMethod: WidthMethod): string {
+  const available = Math.max(0, width - (width >= 50 ? 4 : 0));
+  const prefix = `${selected ? "  ▌" : "   "} #${pr.number} ${pr.draft ? "[draft]" : "[open]"} `;
+  const title = fitLine(pr.title, Math.max(0, available - measureEditText(prefix, { widthMethod })), widthMethod);
+  const content = fitLine(prefix + title, available, widthMethod);
+  return width >= 50 ? boxBody(content, width, widthMethod) : content;
+}
+
+export function detailLines(state: ProjectState | undefined, selectedPr: number, width = 80, widthMethod: WidthMethod = "unicode", wide = false): DetailView {
   const rows: DetailRow[] = [];
-  const add = (text: string, tone: DetailTone = "normal") => rows.push({ text, tone });
-  const section = (label: string) => { if (rows.length) add("", "muted"); add(`  ${label}`, "heading"); };
-  if (!state) { add("  No projects configured. Add a project to the registry.", "muted"); return { lines: rows.map(row => row.text), rows, selectedLine: 0 }; }
-  add(`  ${safeText(state.project.name)}`, "title");
-  add(`  ${safeText(state.project.lifecycle)}  ·  ${safeText(state.project.path)}`, "muted");
-  section("NEXT ACTION");
-  for (const line of wrapped(state.project.nextAction ?? "Not set", Math.max(1, width - 4), widthMethod)) add(`    ${line}`, state.project.nextAction ? "normal" : "muted");
-  section("LOCAL GIT");
+  const add = (text: string, tone: DetailTone = "normal", surface?: "alt") => rows.push({ text, tone, surface });
+  const addSpans = (spans: DetailSpan[], tone: DetailTone = "normal", surface?: "alt") => rows.push({ text: spans.map(span => span.text).join(""), tone, spans, surface });
+  if (!state) { add("  No projects registered. Press s to add your first project.", "muted"); return { lines: rows.map(row => row.text), rows, selectedLine: 0 }; }
+  const identityMarker = fitLine("  ◇ ", width, widthMethod);
+  addSpans([{ text: identityMarker, tone: "accentSubtle" },
+    { text: fitLine(state.project.name, Math.max(0, width - measureEditText(identityMarker, { widthMethod })), widthMethod), tone: "title", strong: true }], "title");
+  const lifecycle = fitLine(`  ${safeText(state.project.lifecycle).toUpperCase()}`, width, widthMethod);
+  addSpans([{ text: lifecycle, tone: "normal" },
+    { text: fitLine(`  ·  ${safeText(state.project.path)}`, Math.max(0, width - measureEditText(lifecycle, { widthMethod })), widthMethod), tone: "muted" }]);
+  add("  " + "─".repeat(Math.max(0, width - 2)), "divider");
+  add(boxEdge("NEXT ACTION", width, false, widthMethod), "accentSubtle", "alt");
+  for (const line of wrapped(state.project.nextAction ?? "Not set", Math.max(1, width - 4), widthMethod))
+    addSpans(boxBodySpans(line, width, state.project.nextAction ? "action" : "muted", widthMethod, "accentSubtle"), "normal", "alt");
+  add(boxEdge("", width, true, widthMethod), "accentSubtle", "alt");
+  add("", "muted");
   const git = state.git;
-  if (git.kind === "loading") add("    Loading Git state…", "muted");
-  else if (git.kind === "unavailable") add(`    Unavailable · ${safeText(git.reason)}`, "error");
-  else if (git.kind === "stale") add(`    Stale · ${safeText(git.previous.branch)} · ${safeText(git.reason)}`, "warn");
-  else {
-    add(`    ${git.detached ? "Detached HEAD" : `Branch ${safeText(git.branch)}`}  ·  ${git.clean ? "Clean" : "Dirty"}`, git.clean ? "good" : "warn");
-    if (!git.clean) add(`    ${[git.staged && "staged", git.unstaged && "unstaged", git.untracked && "untracked"].filter(Boolean).join(" · ")}`, "muted");
-  }
-  section("GITHUB");
+  const local: DetailRow[] = git.kind === "loading" ? [{ text: "Loading Git state…", tone: "muted" }]
+    : git.kind === "unavailable" ? [{ text: `Unavailable · ${safeText(git.reason)}`, tone: "unavailable" }]
+    : git.kind === "stale" ? [{ text: `Stale · ${safeText(git.previous.branch)}`, tone: "warn" }, { text: safeText(git.reason), tone: "muted" }]
+    : [{ text: git.detached ? "Detached HEAD" : `Branch ${safeText(git.branch)}`, tone: "normal" },
+      { text: git.clean ? "● Clean" : "● Dirty", tone: git.clean ? "good" : "warn" },
+      ...(!git.clean ? [{ text: [git.staged && "staged", git.unstaged && "unstaged", git.untracked && "untracked"].filter(Boolean).join(" · "), tone: "muted" as const }] : [])];
   const remote = state.github;
   const data = remote.kind === "available" ? remote : remote.kind === "stale" || remote.kind === "loading" ? remote.previous : undefined;
-  if (remote.kind === "unavailable") add(`    Unavailable · ${safeText(remote.reason)}`, "error");
-  else {
-    if (remote.kind === "loading") add(`    Loading${data ? " · previous data below" : "…"}`, "muted");
-    if (remote.kind === "stale") add(`    Stale · ${safeText(remote.reason)}`, "warn");
-    if (data) add(`    ${data.issues} open issues  ·  ${data.pullRequests.length} open PRs${remote.kind === "available" ? "" : " (previous)"}`, remote.kind === "available" ? "normal" : "warn");
+  const github: DetailRow[] = remote.kind === "unavailable" ? [{ text: `Unavailable · ${safeText(remote.reason)}`, tone: "unavailable" }] : [];
+  if (remote.kind === "loading") github.push({ text: `Loading${data ? " · previous data below" : "…"}`, tone: "muted" });
+  if (remote.kind === "stale") github.push({ text: `Stale · ${safeText(remote.reason)}`, tone: "warn" });
+  if (remote.kind === "available") github.push({ text: "Available", tone: "good" });
+  if (data) github.push({ text: `Issues ${data.issues} open${remote.kind === "available" ? "" : " (previous)"}`, tone: "normal" },
+    { text: `PRs ${data.pullRequests.length} open${remote.kind === "available" ? "" : " (previous)"}`, tone: "normal" });
+  const paired = wide && width >= 68;
+  if (paired) {
+    const leftWidth = Math.floor((width - 1) / 2);
+    const rightWidth = width - leftWidth - 1;
+    addSpans([...boxTopSpans("LOCAL GIT", leftWidth, widthMethod), { text: " ", tone: "muted" }, ...boxTopSpans("GITHUB", rightWidth, widthMethod)], "normal", "alt");
+    for (let index = 0; index < Math.max(2, local.length, github.length); index++)
+      addSpans([
+        ...boxBodySpans(local[index]?.text ?? "", leftWidth, local[index]?.tone ?? "normal", widthMethod),
+        { text: " ", tone: "muted" },
+        ...boxBodySpans(github[index]?.text ?? "", rightWidth, github[index]?.tone ?? "normal", widthMethod),
+      ], "normal", "alt");
+    add(`${boxEdge("", leftWidth, true, widthMethod)} ${boxEdge("", rightWidth, true, widthMethod)}`, "divider", "alt");
+  } else {
+    for (const [label, values] of [["LOCAL GIT", local], ["GITHUB", github]] as const) {
+      if (width >= 50) addSpans(boxTopSpans(label, width, widthMethod), "normal", "alt");
+      else add(`  ${label}`, "heading");
+      for (const value of values) {
+        if (width >= 50) addSpans(boxBodySpans(value.text, width, value.tone, widthMethod), "normal", "alt");
+        else add(`    ${value.text}`, value.tone);
+      }
+      if (width >= 50) add(boxEdge("", width, true, widthMethod), "divider", "alt");
+      add("", "muted");
+    }
   }
   let selectedLine = 0;
+  let selectedEndLine: number | undefined;
   if (data?.pullRequests.length) {
-    section("PULL REQUESTS");
+    add("", "muted");
+    if (width >= 50) addSpans(boxTopSpans(`PULL REQUESTS (${data.pullRequests.length})`, width, widthMethod));
+    else add(`  PULL REQUESTS (${data.pullRequests.length})`, "heading");
     data.pullRequests.forEach((pr, index) => {
-      if (index > 0) add("", "muted");
       if (index === selectedPr) selectedLine = rows.length;
-      const prefix = `${index === selectedPr ? "  ▌" : "   "} #${pr.number} `;
-      const suffix = pr.draft ? " [draft]" : "";
-      const titleWidth = Math.max(1, width - measureEditText(prefix + suffix, { widthMethod }));
-      const titleLines = wrapped(pr.title, titleWidth, widthMethod);
-      titleLines.forEach((line, lineIndex) => add(`${lineIndex === 0 ? prefix : "      "}${line}${lineIndex === 0 ? suffix : ""}`, index === selectedPr ? "selected" : "normal"));
-      add(`      Review ${safeText(pr.review ?? "unavailable")}  ·  Checks ${safeText(pr.checks ?? "unavailable")}`, "muted");
+      add(prRow(pr, index === selectedPr, width, widthMethod), index === selectedPr ? "selected" : "normal");
+      if (index === selectedPr) {
+        const previous = remote.kind === "available" ? "" : " (previous)";
+        const detail = (label: string, value: string | null) => {
+          const content = fitLine(`      ${label} ${safeText(value ?? "unavailable")}${previous}`, Math.max(0, width - (width >= 50 ? 4 : 0)), widthMethod);
+          add(width >= 50 ? boxBody(content, width, widthMethod) : content, value === null ? "unavailable" : "muted", "alt");
+        };
+        detail("Review", pr.review);
+        detail("Checks", pr.checks);
+        selectedEndLine = rows.length - 1;
+      }
     });
+    if (width >= 50) add(boxEdge("", width, true, widthMethod), "divider");
   }
-  if (width >= 38) { section("QUICK ACTIONS"); add("    f files  ·  e editor  ·  t terminal  ·  g repo  ·  p PR", "muted"); }
-  return { lines: rows.map(row => row.text), rows, selectedLine };
+  return { lines: rows.map(row => row.text), rows, selectedLine, selectedEndLine };
+}
+
+export function detailViewport(view: DetailView, offset: number, height: number): { rows: DetailRow[]; offset: number } {
+  const start = Math.max(0, Math.min(offset, Math.max(0, view.rows.length - height)));
+  return { rows: view.rows.slice(start, start + height), offset: start };
+}
+
+export function scrollToSelectedPr(view: DetailView, offset: number, height: number): number {
+  if (view.selectedEndLine === undefined) return offset;
+  const last = Math.min(view.selectedEndLine, view.selectedLine + Math.max(0, height - 1));
+  if (view.selectedLine < offset) return view.selectedLine;
+  if (last >= offset + height) return last - height + 1;
+  return offset;
+}
+
+export function shortcutFooter(width: number, help: boolean, state: ProjectState | undefined, selectedPr: number, widthMethod: WidthMethod = "unicode"): string {
+  const available = state?.github.kind === "available" ? state.github : undefined;
+  const hasPrs = !!available?.pullRequests.length;
+  const selected = !!available && selectedPr >= 0 && selectedPr < available.pullRequests.length;
+  const hints = help ? ["? close help", "q quit", "PgUp/PgDn scroll", "↑/↓ project"]
+    : !state ? ["? help", "q quit", "s settings"]
+    : selected ? ["? help", "q quit", "s settings", "p open PR", "Tab next PR", "↑/↓ project", "PgUp/PgDn scroll", "f files", "e editor", "t terminal", "g repo", "r refresh"]
+      : ["? help", "q quit", "s settings", "↑/↓ project", ...(hasPrs ? ["Tab select PR"] : []), "f files", "e editor", "t terminal", ...(state?.project.repository ? ["g repo", "r refresh"] : []), "PgUp/PgDn scroll"];
+  const measure = (value: string) => measureEditText(value, { widthMethod });
+  if (width < measure("? help · q quit")) return width >= measure("? q") ? "? q" : fitLine("?", width, widthMethod);
+  const shown: string[] = [];
+  for (const hint of hints) {
+    const candidate = [...shown, hint].join(" · ");
+    if (measure(candidate) <= width) shown.push(hint);
+  }
+  return shown.join(" · ");
 }
 
 export function scrollToLine(offset: number, line: number, height: number): number {
@@ -230,6 +406,17 @@ export function scrollToLine(offset: number, line: number, height: number): numb
 }
 
 export type Feedback = { kind: "loading" | "success" | "error" | "unavailable" | "info"; text: string; projectId?: string };
+export function feedbackColor(kind: Feedback["kind"], theme: SemanticTheme): string {
+  return { loading: theme.info, success: theme.success, error: theme.error, unavailable: theme.unavailable, info: theme.info }[kind];
+}
+
+export function detailToneColor(tone: DetailTone, theme: SemanticTheme): string {
+  return { heading: theme.heading, divider: theme.divider, accent: theme.accent, accentSubtle: theme.accentSubtle,
+    action: theme.textPrimary,
+    title: theme.textPrimary, muted: theme.textMuted, normal: theme.textSecondary,
+    good: theme.success, warn: theme.attention, error: theme.error, unavailable: theme.unavailable,
+    selected: theme.textOnSelection }[tone];
+}
 export function feedbackForSelection(feedback: Feedback, projectId?: string): Feedback {
   return feedback.projectId && feedback.projectId !== projectId ? { kind: "info", text: "Select a project to view its current status." } : feedback;
 }
@@ -241,6 +428,10 @@ export function moveSelection(selected: number, count: number, direction: "up" |
 export function moveProjectSelection(selected: number, selectedPr: number, count: number, direction: "up" | "down") {
   const next = moveSelection(selected, count, direction);
   return { selected: next, selectedPr: next === selected ? selectedPr : -1 };
+}
+
+export function nextPrSelection(selectedPr: number, count: number): number {
+  return count > 0 ? (selectedPr + 1) % count : -1;
 }
 
 export function projectLoadNotice(phase: "registry" | "loading" | "ready", count = 0): string {
@@ -264,13 +455,15 @@ export function projectActionForKey(key: ProjectActionKey, actions: ProjectActio
     case "g": return { action: actions.repository(project), launched: "Repository opener" };
     case "p": {
       const pr = state.github.kind === "available" ? state.github.pullRequests[selectedPr] : undefined;
-      return { action: pr ? actions.pullRequest(project, pr) : Promise.reject(new Error("Select an available PR with Tab first.")), launched: `PR #${pr?.number} opener` };
+      return { action: pr ? actions.pullRequest(project, pr) : Promise.reject(new Error("Select an available PR with Tab first.")), launched: pr ? `PR #${pr.number} opener` : "PR opener" };
     }
   }
 }
 
-export async function runDashboard(): Promise<void> {
-  const renderer = await createCliRenderer({ exitOnCtrlC: true });
+export async function runDashboard(registryPath = defaultRegistryPath(), createRenderer = createCliRenderer,
+  providers: { git?: typeof inspectGit; github?: typeof inspectGithub } = {}): Promise<void> {
+  let theme = resolveTheme();
+  const renderer = await createRenderer({ exitOnCtrlC: true, backgroundColor: theme.background });
   let destroyed = false;
   let states: ProjectState[] = [];
   let selected = 0;
@@ -283,66 +476,260 @@ export async function runDashboard(): Promise<void> {
   let detailOffset = 0;
   const refresh = new GithubRefresh();
   let actions: ProjectActions | undefined;
-  const layout = new BoxRenderable(renderer, { flexDirection: "column", gap: 0, width: "100%", height: "100%" });
-  const title = new TextRenderable(renderer, { content: "Wolf Den", fg: "#9fd4ff" });
-  const panels = new BoxRenderable(renderer, { flexDirection: "row", gap: 0, width: "100%" });
-  const list = new TextRenderable(renderer, { content: "", fg: "#ffffff" });
-  const divider = new TextRenderable(renderer, { content: "", fg: "#668198" });
-  const detail = new TextRenderable(renderer, { content: "", fg: "#d6e4ee" });
-  const message = new TextRenderable(renderer, { content: "", fg: "#ffd58a" });
-  const footer = new TextRenderable(renderer, { content: "", fg: "#9aa9b7" });
+  const persistence = new RegistryPersistence(registryPath);
+  let settings: SettingsSession | null = null;
+  let settingsLoading = false;
+  let settingsOpeningId = 0;
+  let settingsNavigation = new SettingsNavigation();
+  let activeTheme = theme;
+  const layout = new BoxRenderable(renderer, { flexDirection: "column", gap: 0, width: "100%", height: "100%", backgroundColor: theme.background });
+  const title = new TextRenderable(renderer, { content: "Wolf Den", fg: theme.heading });
+  const panels = new BoxRenderable(renderer, { flexDirection: "row", gap: 0, width: "100%", backgroundColor: theme.panel });
+  const listPanel = new BoxRenderable(renderer, { flexDirection: "column", gap: 0, backgroundColor: theme.panel });
+  const listHeading = new TextRenderable(renderer, { content: "", fg: theme.heading });
+  const list = new TextRenderable(renderer, { content: "", fg: theme.textPrimary });
+  const listSummary = new TextRenderable(renderer, { content: "", fg: theme.textSecondary });
+  const divider = new TextRenderable(renderer, { content: "", fg: theme.divider });
+  const detail = new TextRenderable(renderer, { content: "", fg: theme.textSecondary });
+  const message = new TextRenderable(renderer, { content: "", fg: theme.attention, bg: theme.panelAlt });
+  const footer = new TextRenderable(renderer, { content: "", fg: theme.textMuted });
   layout.add(title);
-  panels.add(list);
+  listPanel.add(listHeading);
+  listPanel.add(list);
+  listPanel.add(listSummary);
+  panels.add(listPanel);
   panels.add(divider);
   panels.add(detail);
   layout.add(panels);
   layout.add(message);
   layout.add(footer);
   renderer.root.add(layout);
+  const settingsView = new SettingsView(renderer, () => render());
+  renderer.root.add(settingsView.root);
+
+  const applyTheme = (next: SemanticTheme) => {
+    theme = next;
+    renderer.setBackgroundColor(theme.background);
+    layout.backgroundColor = theme.background;
+    panels.backgroundColor = theme.panel;
+    title.fg = theme.heading;
+    listPanel.backgroundColor = theme.panel;
+    listHeading.fg = theme.heading;
+    list.fg = theme.textPrimary;
+    listSummary.fg = theme.textSecondary;
+    divider.fg = theme.divider;
+    detail.fg = theme.textSecondary;
+    message.bg = theme.panelAlt;
+    footer.fg = theme.textMuted;
+  };
 
   const render = () => {
     if (destroyed) return;
+    if (settings || settingsLoading) {
+      layout.visible = false;
+      settingsView.update(settings, settingsNavigation);
+      return;
+    }
+    layout.visible = true; settingsView.root.visible = false;
     const dimensions = dashboardLayout(renderer.terminalWidth, renderer.terminalHeight, states.length);
     panels.flexDirection = dimensions.wide ? "row" : "column";
     title.height = dimensions.headerHeight;
     panels.height = dimensions.contentHeight;
-    list.width = dimensions.navigatorWidth; list.height = dimensions.navigatorHeight;
+    listPanel.width = dimensions.navigatorWidth; listPanel.height = dimensions.navigatorHeight;
+    const navigatorHeadingRows = navigatorHeadingHeight(dimensions.wide, dimensions.navigatorHeight);
+    const navigatorRows = Math.max(0, dimensions.navigatorHeight - navigatorHeadingRows - dimensions.radarHeight);
+    listHeading.width = dimensions.navigatorWidth; listHeading.height = navigatorHeadingRows;
+    list.width = dimensions.navigatorWidth; list.height = navigatorRows;
+    listSummary.width = dimensions.navigatorWidth; listSummary.height = dimensions.radarHeight;
     divider.width = dimensions.dividerWidth; divider.height = dimensions.dividerHeight;
     detail.width = dimensions.detailWidth; detail.height = dimensions.detailHeight;
     message.height = dimensions.statusHeight; footer.height = dimensions.footerHeight;
-    title.content = fitLine("🐺 Wolf Den", dimensions.columns, renderer.widthMethod);
-    const navigatorHeadingRows = navigatorHeadingHeight(dimensions.wide, dimensions.navigatorHeight);
-    const navigatorRows = dimensions.navigatorHeight - navigatorHeadingRows;
+    const overview = `${states.length} project${states.length === 1 ? "" : "s"} · ${radarSummary(states)}`;
+    title.content = fitLine(dimensions.wide ? "🐺 Wolf Den" : `🐺 Wolf Den · ${overview}`, dimensions.columns, renderer.widthMethod);
     const navigator = navigatorView(states, selected, navigatorRows, dimensions.navigatorWidth, renderer.widthMethod);
     selected = navigator.index;
-    list.content = navigatorContent(navigator, dimensions.navigatorWidth, renderer.widthMethod,
-      navigatorHeadingRows ? navigatorHeadingText(states.length, dimensions.navigatorWidth, renderer.widthMethod) : undefined,
-      navigatorHeadingRows - 1);
+    listHeading.content = navigatorHeadingRows ? navigatorHeadingText(states.length, dimensions.navigatorWidth, renderer.widthMethod) : "";
+    list.content = navigatorContent(navigator, dimensions.navigatorWidth, renderer.widthMethod, undefined, 0, theme);
+    listSummary.content = dimensions.radarHeight ? radarContent(states, dimensions.navigatorWidth, renderer.widthMethod, theme) : "";
     divider.content = dimensions.wide ? Array(dimensions.dividerHeight).fill("│").join("\n") : "─".repeat(dimensions.dividerWidth);
     const view = showingHelp
-      ? { lines: ["Keyboard shortcuts", "↑/↓  Select project", "Tab  Select next PR", "e  Open project in VS Code", "t  Open terminal in project", "f  Open project in file manager", "g  Open GitHub repository", "p  Open selected PR", "r  Refresh selected project's GitHub data", "PgUp/PgDn  Scroll details", "?  Close help", "q / Esc / Ctrl+C  Quit"], selectedLine: 0 }
-      : registryLoaded ? detailLines(states[selected], selectedPr, dimensions.detailWidth, renderer.widthMethod) : { lines: [feedback.text], selectedLine: 0 };
-    detailOffset = Math.min(detailOffset, Math.max(0, view.lines.length - dimensions.detailHeight));
-    const tones: Record<DetailTone, string> = { heading: "#849bab", title: "#f0f7fc", muted: "#91a8b8", normal: "#d6e4ee", good: "#9bd6ac", warn: "#e7bd83", error: "#ed9a9a", selected: "#f7fbff" };
-    detail.content = "rows" in view && view.rows
-      ? new StyledText(view.rows.slice(detailOffset, detailOffset + dimensions.detailHeight).flatMap((row, index, visible) => {
+      ? { lines: ["Keyboard shortcuts", "↑/↓  Select project", "Tab  Select next PR", "s  Open Settings", "e  Open project in VS Code", "t  Open terminal in project", "f  Open project in file manager", "g  Open GitHub repository", "p  Open selected PR", "r  Refresh selected project's GitHub data", "PgUp/PgDn  Scroll details", "?  Close help", "q / Esc / Ctrl+C  Quit"], selectedLine: 0 }
+      : registryLoaded ? detailLines(states[selected], selectedPr, dimensions.detailWidth, renderer.widthMethod, dimensions.wide) : { lines: [feedback.text], selectedLine: 0 };
+    const visible = "rows" in view && view.rows ? detailViewport(view, detailOffset, dimensions.detailHeight) : undefined;
+    detailOffset = visible?.offset ?? Math.min(detailOffset, Math.max(0, view.lines.length - dimensions.detailHeight));
+    detail.content = visible
+      ? new StyledText(visible.rows.flatMap((row, index, shownRows) => {
           const line = fitLine(row.text, dimensions.detailWidth, renderer.widthMethod);
-          const content = row.tone === "title" || row.tone === "heading" || row.tone === "selected" ? bold(line) : line;
-          const styled = fg(tones[row.tone])(row.tone === "selected" ? bg("#29465c")(content) : content);
-          return index === visible.length - 1 ? [styled] : [styled, fg(tones.muted)("\n")];
+          const styled = row.spans ? row.spans.map(span => {
+            const content = span.strong ? bold(span.text) : span.text;
+            return fg(detailToneColor(span.tone, theme))(row.surface === "alt" ? bg(theme.panelAlt)(content) : content);
+          }) : (() => {
+            const content = row.tone === "title" || row.tone === "heading" || row.tone === "accent" || row.tone === "action" || row.tone === "selected" ? bold(line) : line;
+            const surface = row.tone === "selected" ? bg(theme.selectionBackground)(content)
+              : row.surface === "alt" ? bg(theme.panelAlt)(content) : content;
+            return [fg(detailToneColor(row.tone, theme))(surface)];
+          })();
+          return index === shownRows.length - 1 ? styled : [...styled, fg(theme.textMuted)("\n")];
         }))
       : view.lines.slice(detailOffset, detailOffset + dimensions.detailHeight).map(line => fitLine(line, dimensions.detailWidth, renderer.widthMethod)).join("\n");
     const shown = feedbackForSelection(feedback, states[selected]?.project.id);
     const labels = { loading: "…", success: "✓", error: "!", unavailable: "!", info: "·" };
-    const colors = { loading: "#9fc8de", success: "#9bd6ac", error: "#ed9a9a", unavailable: "#e7bd83", info: "#a8b9c7" };
-    message.fg = colors[shown.kind];
+    message.fg = feedbackColor(shown.kind, theme);
     message.content = fitLine(`${labels[shown.kind]} ${shown.text}`, dimensions.columns, renderer.widthMethod);
-    const shortcuts = dimensions.columns < 18 ? "? q" : dimensions.columns < 45
-      ? "? help · q quit · ↑/↓ project · Tab PR"
-      : "? help · q quit · ↑/↓ project · f files · e editor · t terminal · Tab PR · PgUp/PgDn scroll · g repo · p PR · r refresh";
-    footer.content = fitLine(shortcuts, dimensions.columns, renderer.widthMethod);
+    footer.content = shortcutFooter(dimensions.columns, showingHelp, states[selected], selectedPr, renderer.widthMethod);
   };
+  const syncConfiguration = (configuration: RegistryConfiguration) => {
+    const previous = states;
+    const selectedState = previous[selected];
+    const id = retainedProjectId(previous.map(state => state.project.id), configuration.projects.map(project => project.id), selectedState?.project.id);
+    states = reconcileProjectStates(previous, configuration.projects);
+    selected = Math.max(0, states.findIndex(state => state.project.id === id));
+    if (states[selected] !== selectedState) { selectedPr = -1; detailOffset = 0; }
+    activeTheme = resolveTheme(configuration.settings.theme, configuration.settings.themeOverrides);
+    actions = new ProjectActions(undefined, undefined, configuration.settings.terminal);
+    const pending = states.filter(state => !previous.includes(state));
+    initialLoadPending = false;
+    feedback = { kind: "success", text: projectLoadNotice("ready", states.length) };
+    // Capture actual state objects: obsolete provider callbacks cannot write into a reused index.
+    void loadProjectStates(pending.map(state => state.project), providers.git, providers.github, (result, index) => {
+      const target = pending[index];
+      if (!destroyed && target && states.includes(target)) { target.git = result.git; target.github = result.github; render(); }
+    });
+  };
+  const syncSettings = (session: SettingsSession) => syncConfiguration(parseConfiguration(JSON.stringify(session.document)));
   const onKey = (key: KeyEvent) => {
+    if (settingsLoading) {
+      if (key.name === "escape") { settingsOpeningId++; settingsLoading = false; render(); }
+      return;
+    }
+    if (settings) {
+      const session = settings;
+      if ((renderer.terminalWidth < 42 || renderer.terminalHeight < 18) && key.name !== "escape" && !(key.ctrl && key.name === "c")) { key.preventDefault(); return; }
+      if (session.busy) return;
+      const projects = session.projects;
+      if (projects.form?.editing) {
+        if (key.name === "escape") { key.preventDefault(); projects.cancelField(); render(); }
+        else if (key.name === "return" || key.name === "enter" || key.name === "tab") {
+          key.preventDefault();
+          if (projects.acceptField() && key.name === "tab") settingsNavigation.moveForm(key.shift ? -1 : 1, session);
+          render();
+        }
+        return; // Native InputRenderable consumes all other editor keys and paste.
+      }
+      if (projects.discardingForm) {
+        if (key.name === "escape") projects.discardingForm = false;
+        else if (key.name === "return" || key.name === "enter") {
+          projects.form = null; projects.discardingForm = false; settingsNavigation.showProjects(session);
+        }
+        render(); return;
+      }
+      if (session.editing) {
+        if (key.name === "escape") session.cancelEdit();
+        else if (key.name === "return" || key.name === "enter") session.acceptEdit();
+        else session.input(key.name);
+        applyTheme(session.theme); render(); return;
+      }
+      if (session.confirmation) {
+        if (key.name === "escape") { session.cancelConfirmation(); render(); return; }
+        if (key.name === "return" || key.name === "enter") {
+          const revision = session.revision;
+          void session.confirm().then(result => {
+            if (destroyed || settings !== session) return;
+            if (result === "exit") { settings = null; settingsNavigation.help = false; applyTheme(activeTheme); }
+            else { if (session.revision !== revision) syncSettings(session); applyTheme(session.theme); }
+            render();
+          });
+        }
+        return;
+      }
+      if (key.name === "?") { settingsNavigation.help = !settingsNavigation.help; settingsNavigation.helpOffset = 0; render(); return; }
+      if (settingsNavigation.help) {
+        if (key.name === "escape") { settingsNavigation.help = false; render(); }
+        else if (key.name === "pageup" || key.name === "pagedown") { settingsNavigation.helpOffset = Math.max(0, settingsNavigation.helpOffset + (key.name === "pageup" ? -5 : 5)); render(); }
+        return;
+      }
+      if (key.name === "escape") {
+        if (settingsNavigation.section === "project-remove") { projects.removingId = null; settingsNavigation.showProjects(session); render(); return; }
+        if (settingsNavigation.section === "project-form") { if (projects.closeForm()) settingsNavigation.showProjects(session); render(); return; }
+        if (settingsNavigation.back(session)) { render(); return; }
+        if (session.requestExit()) { settings = null; applyTheme(activeTheme); }
+        render(); return;
+      }
+      if (key.name === "up" || key.name === "down" || key.name === "left" || key.name === "right") {
+        settingsNavigation.move(key.name, session); render(); return;
+      }
+      if (key.name === "pageup" || key.name === "pagedown") {
+        if (settingsNavigation.section === "project-remove") { settingsNavigation.identityOffset = Math.max(0, settingsNavigation.identityOffset + (key.name === "pageup" ? -2 : 2)); render(); return; }
+        for (let index = 0; index < 5; index++) settingsNavigation.move(key.name === "pageup" ? "up" : "down", session);
+        render(); return;
+      }
+      if (key.name === "tab") {
+        if (settingsNavigation.section === "project-form" || settingsNavigation.section === "project-remove") settingsNavigation.moveForm(key.shift ? -1 : 1, session);
+        else settingsNavigation.tab(key.shift, session);
+        render(); return;
+      }
+      if (key.name !== "return" && key.name !== "enter") return;
+      if (settingsNavigation.control === "customize") { settingsNavigation.openColors(session); render(); return; }
+      if (settingsNavigation.section === "projects" && (settingsNavigation.control === "add-project" || settingsNavigation.control.startsWith("project:"))) {
+        projects.openForm(settingsNavigation.control === "add-project"); settingsNavigation.section = "project-form"; settingsNavigation.control = "name"; settingsNavigation.sync(session);
+        render(); return;
+      }
+      if (settingsNavigation.control === "remove-project") {
+        projects.requestRemoval(); settingsNavigation.identityOffset = 0; settingsNavigation.section = "project-remove"; settingsNavigation.control = "cancel-removal"; settingsNavigation.sync(session); render(); return;
+      }
+      if (settingsNavigation.section === "project-remove") {
+        const removed = projects.removeFocused;
+        projects.confirmRemoval(); settingsNavigation.showProjects(session);
+        session.message = removed ? "Removal is in the draft. Save to keep it." : "Removal canceled. Registration kept."; session.error = false;
+        render(); return;
+      }
+      if (settingsNavigation.section === "project-form") {
+        const control = settingsNavigation.control;
+        if (control === "cancel-project") { if (projects.closeForm()) settingsNavigation.showProjects(session); }
+        else if (control === "apply-project") {
+          void session.applyProject().then(applied => {
+            if (destroyed || settings !== session) return;
+            if (applied) settingsNavigation.showProjects(session);
+            else { settingsNavigation.control = projects.form?.field ?? "name"; settingsNavigation.sync(session); }
+            render();
+          });
+          if (!projects.form) settingsNavigation.showProjects(session);
+        } else if (projectFields.includes(control as ProjectField)) projects.startField(control as ProjectField);
+        render(); return;
+      }
+      if (session.control === "preset") session.cyclePreset();
+      else if (themeTokens.includes(session.control as ThemeToken)) session.startEdit();
+      else if (session.control === "terminal") session.cycleTerminal();
+      else if (session.control === "reset") session.requestReset();
+      else if (session.control === "reload") session.requestReload();
+      else if (session.control === "cancel") {
+        if (session.requestExit()) { settings = null; applyTheme(activeTheme); }
+      } else if (session.control === "save") {
+        void session.save().then(saved => {
+          if (destroyed || settings !== session) return;
+          if (saved) syncSettings(session);
+          applyTheme(session.theme); render();
+        });
+      }
+      applyTheme(settings?.theme ?? activeTheme); render(); return;
+    }
+    if (key.name === "s" && registryLoaded) {
+      const openingId = ++settingsOpeningId;
+      settingsLoading = true; render();
+      void persistence.load().then(snapshot => {
+        if (destroyed || !settingsLoading || settingsOpeningId !== openingId) return;
+        settings = new SettingsSession(snapshot, persistence, states[selected]?.project.id);
+        settingsLoading = false; settingsNavigation = new SettingsNavigation();
+        applyTheme(settings.theme);
+        render();
+      }).catch((error: unknown) => {
+        if (destroyed || !settingsLoading || settingsOpeningId !== openingId) return;
+        settingsLoading = false;
+        feedback = { kind: "error", text: error instanceof Error ? safeText(error.message) : "Could not open Settings." };
+        render();
+      });
+      return;
+    }
     if (key.name === "q" || key.name === "escape") { renderer.destroy(); return; }
     if (key.name === "?") { showingHelp = !showingHelp; detailOffset = 0; render(); return; }
     if (key.name === "pageup" || key.name === "pagedown") { detailOffset = Math.max(0, detailOffset + (key.name === "pageup" ? -5 : 5)); render(); return; }
@@ -351,8 +738,10 @@ export async function runDashboard(): Promise<void> {
     if (key.name === "tab") {
       const data = state?.github.kind === "available" ? state.github : undefined;
       if (!data?.pullRequests.length) { feedback = { kind: "unavailable", text: "No available PRs to select for this project.", projectId: state?.project.id }; render(); return; }
-      selectedPr = (selectedPr + 1) % data.pullRequests.length;
-      detailOffset = scrollToLine(detailOffset, detailLines(state, selectedPr, dashboardLayout(renderer.terminalWidth, renderer.terminalHeight, states.length).detailWidth, renderer.widthMethod).selectedLine, dashboardLayout(renderer.terminalWidth, renderer.terminalHeight, states.length).detailHeight);
+      selectedPr = nextPrSelection(selectedPr, data.pullRequests.length);
+      const dimensions = dashboardLayout(renderer.terminalWidth, renderer.terminalHeight, states.length);
+      const selectedView = detailLines(state, selectedPr, dimensions.detailWidth, renderer.widthMethod, dimensions.wide);
+      detailOffset = scrollToSelectedPr(selectedView, detailOffset, dimensions.detailHeight);
       feedback = { kind: "info", text: `Selected PR #${data.pullRequests[selectedPr]!.number}.`, projectId: state!.project.id };
       render(); return;
     }
@@ -362,7 +751,7 @@ export async function runDashboard(): Promise<void> {
       if (state.github.kind === "loading") { feedback = { kind: "loading", text: `GitHub refresh is already in progress for ${safeText(state.project.name)}.`, projectId: state.project.id }; render(); return; }
       selectedPr = -1;
       feedback = { kind: "loading", text: `Refreshing GitHub for ${safeText(state.project.name)}…`, projectId: state.project.id }; render();
-      void refresh.refresh(state, github => { if (!destroyed) { state.github = github; if (github.kind !== "loading" && states[selected]?.project.id === state.project.id) feedback = { kind: github.kind === "available" ? "success" : "unavailable", text: github.kind === "available" ? `GitHub refreshed for ${safeText(state.project.name)}.` : `GitHub ${github.kind} for ${safeText(state.project.name)}: ${safeText(github.reason)}`, projectId: state.project.id }; render(); } });
+      void refresh.refresh(state, github => { if (!destroyed && states.includes(state)) { state.github = github; if (github.kind !== "loading" && states[selected]?.project.id === state.project.id) feedback = { kind: github.kind === "available" ? "success" : "unavailable", text: github.kind === "available" ? `GitHub refreshed for ${safeText(state.project.name)}.` : `GitHub ${github.kind} for ${safeText(state.project.name)}: ${safeText(github.reason)}`, projectId: state.project.id }; render(); } });
       return;
     }
     if (isProjectActionKey(key.name)) {
@@ -371,8 +760,8 @@ export async function runDashboard(): Promise<void> {
       actionPending = true;
       feedback = { kind: "loading", text: `Launching action for ${safeText(state.project.name)}…`, projectId: state.project.id }; render();
       const { action, launched } = projectActionForKey(key.name, actions, state, selectedPr);
-      void action.then(() => { if (!destroyed && states[selected]?.project.id === state.project.id) { feedback = { kind: "success", text: `${launched} launched for ${safeText(state.project.name)}.`, projectId: state.project.id }; render(); } })
-        .catch((error: unknown) => { if (!destroyed && states[selected]?.project.id === state.project.id) { feedback = { kind: "error", text: `${launched} for ${safeText(state.project.name)} failed: ${error instanceof Error ? safeText(error.message) : "Action failed."}`, projectId: state.project.id }; render(); } })
+      void action.then(() => { if (!destroyed && states.includes(state) && states[selected]?.project.id === state.project.id) { feedback = { kind: "success", text: `${launched} launched for ${safeText(state.project.name)}.`, projectId: state.project.id }; render(); } })
+        .catch((error: unknown) => { if (!destroyed && states.includes(state) && states[selected]?.project.id === state.project.id) { feedback = { kind: "error", text: `${launched} for ${safeText(state.project.name)} failed: ${error instanceof Error ? safeText(error.message) : "Action failed."}`, projectId: state.project.id }; render(); } })
         .finally(() => { actionPending = false; });
       return;
     }
@@ -386,7 +775,14 @@ export async function runDashboard(): Promise<void> {
     render();
   };
   renderer.keyInput.on("keypress", onKey);
-  renderer.on("resize", render);
+  const onResize = () => {
+    if (!settings && !settingsLoading && !showingHelp && selectedPr >= 0) {
+      const dimensions = dashboardLayout(renderer.terminalWidth, renderer.terminalHeight, states.length);
+      detailOffset = scrollToSelectedPr(detailLines(states[selected], selectedPr, dimensions.detailWidth, renderer.widthMethod, dimensions.wide), detailOffset, dimensions.detailHeight);
+    }
+    render();
+  };
+  renderer.on("resize", onResize);
   const onRendererError = () => {
     if (!destroyed) {
       renderer.destroy();
@@ -399,23 +795,27 @@ export async function runDashboard(): Promise<void> {
   renderer.once("destroy", () => {
     destroyed = true;
     renderer.keyInput.off("keypress", onKey);
-    renderer.off("resize", render);
+    renderer.off("resize", onResize);
     renderer.off("render:error", onRendererError);
     renderer.off("handler:error", onRendererError);
   });
   render();
 
   try {
-    const configuration = await loadConfiguration();
+    const configuration = await loadConfiguration(registryPath);
     if (destroyed) return;
+    activeTheme = resolveTheme(configuration.settings.theme, configuration.settings.themeOverrides);
+    applyTheme(activeTheme);
     actions = new ProjectActions(undefined, undefined, configuration.settings.terminal);
     const projects = configuration.projects;
     registryLoaded = true;
     states = projects.map(project => ({ project, git: { kind: "loading" }, github: project.repository ? { kind: "loading" } : { kind: "unavailable", reason: "No GitHub repository configured." } }));
     feedback = { kind: "loading", text: projectLoadNotice("loading", projects.length) };
     render();
-    states = await loadProjectStates(projects, undefined, undefined, (state, index) => {
-      if (!destroyed) { states[index] = state; render(); }
+    const initialStates = states;
+    await loadProjectStates(projects, providers.git, providers.github, (state, index) => {
+      const target = initialStates[index];
+      if (!destroyed && target && states.includes(target)) { target.git = state.git; target.github = state.github; render(); }
     });
     if (destroyed) return;
     initialLoadPending = false;
