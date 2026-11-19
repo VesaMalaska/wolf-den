@@ -8,11 +8,11 @@ Wolf Den answers three questions:
 3. Where did I leave off, and what should I do next?
 
 ## Status
-**v0.2.0 released.** The responsive dashboard, multi-project navigator, selected-project details and safe quick actions have passed human acceptance in Kitty on openSUSE Tumbleweed. See the [v0.2.0 GitHub release](https://github.com/VesaMalaska/wolf-den/releases/tag/v0.2.0) and [QA report](docs/V0.2-RELEASE-QA.md).
+**v0.2.0 is the latest published release.** The responsive dashboard, multi-project navigator, selected-project details and safe quick actions have passed human acceptance in Kitty on openSUSE Tumbleweed. See the [v0.2.0 GitHub release](https://github.com/VesaMalaska/wolf-den/releases/tag/v0.2.0) and [QA report](docs/V0.2-RELEASE-QA.md). v0.3 has passed owner acceptance but **has not yet been released**.
 
-## v0.3 development — release QA pending
+## v0.3 development — owner acceptance passed; unreleased
 
-The `development` branch integrates the v0.3 cockpit hierarchy and project radar, customizable **Wolfy Dark** semantic theme, keyboard-accessible Settings, and safe Add/Edit/Remove Project and manual Next Action editing through Settings → Projects. These features are **implemented on development, not included in the v0.2.0 release**. Automated and PTY verification passed; real Kitty release acceptance remains pending. See the [v0.3 release QA report and owner checklist](docs/V0.3-RELEASE-QA.md), [specification](docs/V0.3-UX-AND-CONFIG-SPEC.md), and [roadmap](docs/ROADMAP.md). The direct cockpit shortcut/editor (#28) is deferred beyond v0.3.
+The `development` branch integrates the v0.3 cockpit hierarchy and project radar, customizable **Wolfy Dark** semantic theme, keyboard-accessible Settings, and safe Add/Edit/Remove Project and manual Next Action editing through Settings → Projects. These features are **implemented on development, not included in the v0.2.0 release**. Automated and PTY verification passed. On **November 19, 2026**, WOLFY completed real Kitty acceptance and reported **all seven checks passed**. No known release blockers remain, subject to final release approval; v0.3 is still unreleased. See the [v0.3 release QA report and owner acceptance record](docs/V0.3-RELEASE-QA.md), [specification](docs/V0.3-UX-AND-CONFIG-SPEC.md), and [roadmap](docs/ROADMAP.md). The direct cockpit shortcut/editor (#28) is deferred beyond v0.3.
 
 ## Future direction — automatic project status (planned)
 
