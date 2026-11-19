@@ -8,11 +8,11 @@ Wolf Den answers three questions:
 3. Where did I leave off, and what should I do next?
 
 ## Status
-**v0.2.0 is the latest published release.** The responsive dashboard, multi-project navigator, selected-project details and safe quick actions have passed human acceptance in Kitty on openSUSE Tumbleweed. See the [v0.2.0 GitHub release](https://github.com/VesaMalaska/wolf-den/releases/tag/v0.2.0) and [QA report](docs/V0.2-RELEASE-QA.md). v0.3 has passed owner acceptance but **has not yet been released**.
+**v0.3.0 is prepared for release but is not tagged or published yet.** v0.2.0 remains the latest published release. The v0.3 implementation and owner acceptance are complete; see the [prepared v0.3.0 release notes](docs/V0.3-RELEASE-NOTES.md) and [v0.3 QA report](docs/V0.3-RELEASE-QA.md). The [v0.2.0 GitHub release](https://github.com/VesaMalaska/wolf-den/releases/tag/v0.2.0) remains available.
 
-## v0.3 development — owner acceptance passed; unreleased
+## v0.3.0 release candidate — owner acceptance passed; publication pending
 
-The `development` branch integrates the v0.3 cockpit hierarchy and project radar, customizable **Wolfy Dark** semantic theme, keyboard-accessible Settings, and safe Add/Edit/Remove Project and manual Next Action editing through Settings → Projects. These features are **implemented on development, not included in the v0.2.0 release**. Automated and PTY verification passed. On **November 19, 2026**, WOLFY completed real Kitty acceptance and reported **all seven checks passed**. No known release blockers remain, subject to final release approval; v0.3 is still unreleased. See the [v0.3 release QA report and owner acceptance record](docs/V0.3-RELEASE-QA.md), [specification](docs/V0.3-UX-AND-CONFIG-SPEC.md), and [roadmap](docs/ROADMAP.md). The direct cockpit shortcut/editor (#28) is deferred beyond v0.3.
+The `development` branch integrates the v0.3 cockpit hierarchy and project radar, customizable **Wolfy Dark** semantic theme, keyboard-accessible Settings, and safe Add/Edit/Remove Project and manual Next Action editing through Settings → Projects. These features are **implemented on development, not included in the v0.2.0 release**. Automated and PTY verification passed. On **November 19, 2026**, WOLFY completed real Kitty acceptance and reported **all seven checks passed**. No known release blockers remain following owner acceptance; the v0.3.0 tag and GitHub Release still require separate authorization. See the [v0.3 release QA report and owner acceptance record](docs/V0.3-RELEASE-QA.md), [specification](docs/V0.3-UX-AND-CONFIG-SPEC.md), and [roadmap](docs/ROADMAP.md). The direct cockpit shortcut/editor (#28) is deferred beyond v0.3.
 
 ## Future direction — automatic project status (planned)
 
