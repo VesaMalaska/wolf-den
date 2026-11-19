@@ -8,11 +8,11 @@ Wolf Den answers three questions:
 3. Where did I leave off, and what should I do next?
 
 ## Status
-**v0.2.0 released.** The responsive dashboard, multi-project navigator, selected-project details and safe quick actions have passed human acceptance in Kitty on openSUSE Tumbleweed. See the [v0.2.0 GitHub release](https://github.com/VesaMalaska/wolf-den/releases/tag/v0.2.0) and [QA report](docs/V0.2-RELEASE-QA.md).
+**v0.2.0 is the latest published release.** The responsive dashboard, multi-project navigator, selected-project details and safe quick actions have passed human acceptance in Kitty on openSUSE Tumbleweed. See the [v0.2.0 GitHub release](https://github.com/VesaMalaska/wolf-den/releases/tag/v0.2.0) and [QA report](docs/V0.2-RELEASE-QA.md). v0.3 has passed owner acceptance but **has not yet been released**.
 
-## Roadmap — planned v0.3
+## v0.3 development — owner acceptance passed; unreleased
 
-The next milestone will improve the cockpit's information hierarchy and project overview, introduce a customizable **Wolfy Dark** semantic color theme, add an in-app Settings view, and provide safe Add/Remove Project and manual Next Action editing through Settings → Projects. These features are **planned for v0.3, not included in v0.2.0**. The direct cockpit shortcut/editor (#28) is deferred beyond v0.3. See the [v0.3 UX and configuration specification](docs/V0.3-UX-AND-CONFIG-SPEC.md) and [roadmap](docs/ROADMAP.md).
+The `development` branch integrates the v0.3 cockpit hierarchy and project radar, customizable **Wolfy Dark** semantic theme, keyboard-accessible Settings, and safe Add/Edit/Remove Project and manual Next Action editing through Settings → Projects. These features are **implemented on development, not included in the v0.2.0 release**. Automated and PTY verification passed. On **November 19, 2026**, WOLFY completed real Kitty acceptance and reported **all seven checks passed**. No known release blockers remain, subject to final release approval; v0.3 is still unreleased. See the [v0.3 release QA report and owner acceptance record](docs/V0.3-RELEASE-QA.md), [specification](docs/V0.3-UX-AND-CONFIG-SPEC.md), and [roadmap](docs/ROADMAP.md). The direct cockpit shortcut/editor (#28) is deferred beyond v0.3.
 
 ## Future direction — automatic project status (planned)
 
@@ -22,7 +22,7 @@ This is **not implemented**. The registry's manually authored Next Action remain
 
 ## Open source and portfolio
 
-Wolf Den is a local-first, read-only terminal dashboard built with TypeScript, Node.js and OpenTUI. It combines local Git status, optional GitHub activity and keyboard-driven project shortcuts. See [LICENSE](LICENSE) for the MIT license.
+Wolf Den is a local-first terminal dashboard built with TypeScript, Node.js and OpenTUI. It combines read-only local Git status and optional GitHub activity with keyboard-driven project shortcuts. On v0.3 development, Settings can save Wolf Den's own registry; project files, Git repositories and GitHub data remain untouched. See [LICENSE](LICENSE) for the MIT license.
 
 Your own project registry lives at `~/.config/wolf-den/projects.json`, outside the cloned repository. Never commit personal registries, authentication data or screenshots containing private project information. Wolf Den uses `gh` for authenticated GitHub access; no API tokens should be placed in the configuration file.
 
